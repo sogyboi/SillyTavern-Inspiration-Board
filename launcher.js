@@ -2,7 +2,7 @@ const SETTINGS_ID = 'inspiration_board_settings';
 const LAUNCHER_ID = 'ib-mobile-launcher';
 const STYLE_ID = 'ib-launcher-fix-style';
 const DIALOG_ID = 'ib-board-dialog-host';
-const VERSION = '0.1.2';
+const VERSION = '0.1.3';
 
 let boardModulePromise = null;
 let boardModule = null;
@@ -26,9 +26,12 @@ function setStatus(message, isError = false) {
 }
 
 function injectLauncherStyles() {
-  if (document.getElementById(STYLE_ID)) return;
-  const style = document.createElement('style');
-  style.id = STYLE_ID;
+  let style = document.getElementById(STYLE_ID);
+  if (!style) {
+    style = document.createElement('style');
+    style.id = STYLE_ID;
+    document.head.appendChild(style);
+  }
   style.textContent = `
     #${LAUNCHER_ID} {
       position: fixed !important;
@@ -78,6 +81,13 @@ function injectLauncherStyles() {
     }
     #${DIALOG_ID}::backdrop { background: rgba(0,0,0,.45); }
     #${DIALOG_ID}:not([open]) { display: none !important; }
+    #${DIALOG_ID}[open] {
+      display: block !important;
+      opacity: 1 !important;
+      visibility: visible !important;
+      pointer-events: auto !important;
+      transform: none !important;
+    }
     #${DIALOG_ID} > #st-inspiration-board {
       position: absolute !important;
       inset: 0 !important;
@@ -90,7 +100,6 @@ function injectLauncherStyles() {
       #${LAUNCHER_ID} .ib-mobile-launch-text { display: inline; }
     }
   `;
-  document.head.appendChild(style);
 }
 
 function ensureFloatingLauncher() {
@@ -112,7 +121,20 @@ function ensureFloatingLauncher() {
 }
 
 function buildSettingsPanel() {
-  if (document.getElementById(SETTINGS_ID)) return true;
+  const existing = document.getElementById(SETTINGS_ID);
+  if (existing) {
+    const legacyLauncher = existing.querySelector('[data-ib-launcher]');
+    if (legacyLauncher) legacyLauncher.setAttribute('data-ib-show-launcher', 'true');
+    let status = existing.querySelector('[data-ib-status]');
+    if (!status) {
+      status = document.createElement('div');
+      status.className = 'ib-settings-status';
+      status.dataset.ibStatus = '';
+      existing.querySelector('.inline-drawer-content')?.appendChild(status);
+    }
+    if (status) status.textContent = `Ready · v${VERSION}`;
+    return true;
+  }
   const host = document.querySelector('#extensions_settings2') || document.querySelector('#extensions_settings');
   if (!host) return false;
 
@@ -167,7 +189,7 @@ async function loadBoardModule() {
 
   setStatus('Loading board code…');
   removeStaleBoardElements();
-  const moduleUrl = new URL('./index.js?v=0.1.2', import.meta.url).href;
+  const moduleUrl = new URL('./index.js?v=0.1.3', import.meta.url).href;
   boardModulePromise = import(moduleUrl)
     .then((module) => {
       if (typeof module.openBoard !== 'function' || typeof module.closeBoard !== 'function') {
@@ -266,7 +288,7 @@ function handleLauncherClick(event) {
     return;
   }
 
-  const launcherTarget = event.target.closest?.('[data-ib-show-launcher]');
+  const launcherTarget = event.target.closest?.('[data-ib-show-launcher], [data-ib-launcher]');
   if (launcherTarget) {
     event.preventDefault();
     event.stopPropagation();
@@ -281,10 +303,12 @@ function bootLauncher() {
 
   // Capture clicks before SillyTavern's drawer handlers. This also survives
   // themes or extensions that rebuild the settings panel after startup.
-  if (!globalThis.__inspirationBoardClickHandlerInstalled) {
-    document.addEventListener('click', handleLauncherClick, true);
-    globalThis.__inspirationBoardClickHandlerInstalled = true;
+  const previousHandler = globalThis.__inspirationBoardClickHandler;
+  if (typeof previousHandler === 'function') {
+    document.removeEventListener('click', previousHandler, true);
   }
+  document.addEventListener('click', handleLauncherClick, true);
+  globalThis.__inspirationBoardClickHandler = handleLauncherClick;
 
   clearInterval(bootTimer);
   let attempts = 0;
