@@ -1,88 +1,113 @@
 # SillyTavern Inspiration Board
 
-A touch-first visual reference board for building SillyTavern characters from saved artwork and inspiration images.
+A touch-first visual character-design workspace for SillyTavern. It is built around the unfolded Samsung Z Fold in portrait orientation, while also supporting normal phones, tablets, and desktop browsers.
 
-The interface is designed around an unfolded foldable phone held vertically, while still working on normal phones and desktop browsers.
+## Main features
 
-## Features
+### Image Inbox and bulk importing
 
-- Infinite pan-and-zoom reference canvas.
-- Multi-photo import from Android Gallery or any browser file picker. Select as many images as you want in one operation.
-- Drag-and-drop image import on desktop.
-- Paste images directly from the clipboard.
-- Import direct image URLs when the source allows browser access.
-- Automatic thumbnail generation so large boards stay responsive.
-- Duplicate-file detection using an image hash. The original file is stored only once even if you place it multiple times.
-- Move and resize image cards.
-- One-finger pan and two-finger pinch zoom.
-- Mouse wheel zoom and desktop keyboard shortcuts.
-- Search by filename, tag, collection, role, or note text.
-- Multiple character boards.
-- Notes.
-- Image tags and collections.
-- Reference roles: General, Face, Outfit, Hair, Accessory, and Mood.
-- Main portrait and character-reference selection.
-- Item locking, duplication, trash, undo, and redo.
-- Smart Arrange and Fit Board.
-- Character Creator drawer with standard SillyTavern character fields.
-- Sends the completed draft and chosen main portrait into SillyTavern's normal character creator.
-- Full JSON backup/restore including the original stored image files.
-- Cleanup tool for images that are no longer used by any board.
-- Local persistence through IndexedDB plus lightweight board metadata storage.
+- Select many photos from Android Gallery in one upload.
+- Paste images, drag and drop files, or import a direct image URL.
+- New images enter a separate Inbox instead of flooding the canvas.
+- Select many Inbox images, set their reference type, favorite/rate them, and place them together.
+- Exact duplicate detection plus perceptual near-duplicate review for resized or recompressed copies.
 
-## Installation
+### Infinite character canvas
 
-### SillyTavern extension URL
+- One-finger pan, pinch zoom, mouse-wheel zoom, minimap, fit-to-board, and per-board view memory.
+- Drag and resize images and notes.
+- Long-press or use the item menu for actions.
+- Double-tap an item to focus it; double-tap empty space to fit the board.
+- Lasso selection and bulk move, reference type, tags, grouping, duplication, and deletion.
+- Canvas-only mode and left/bottom toolbar layouts.
 
-Once this repository is public, open SillyTavern's extension installer and paste the repository URL.
+### Groups and templates
 
-### Manual installation
+- Resizable named group frames with colors.
+- Drop images into groups and move a whole group with its contents.
+- Collapse or expand groups.
+- Character Design, Compact Design, and Blank Canvas templates.
+- Smart Arrange places references into matching groups.
 
-Place the repository folder in your SillyTavern user extensions directory:
+### Character Reference Basket
+
+References are stored separately from the canvas layout and grouped as:
+
+- General
+- Face
+- Hair
+- Body
+- Outfit
+- Expression
+- Accessory
+- Prop
+- Mood / Vibe
+- Environment
+
+Choose a main portrait and send the assembled draft and avatar into SillyTavern's normal Character Creator.
+
+### Image editing and metadata
+
+- Non-destructive crop zoom and focal point.
+- Rotate, horizontal/vertical flip, reset crop, replace image, and view original.
+- Favorites, 1–5 star ratings, source URLs, notes, tags, and collections.
+
+### SillyTavern integration
+
+- Link a board to an existing SillyTavern character.
+- Import current character fields into the board.
+- Open the linked character chat.
+- Automatically select the linked board when that character is active.
+- Optional AI-assisted suggestions using SillyTavern's configured **Image Captioning** model. Suggestions are shown for review and are never applied automatically.
+
+### Safety and portability
+
+- Automatic browser-storage saves.
+- Undo and redo.
+- Automatic and manual history snapshots with restore.
+- Full JSON backup and restore including original stored images.
+- Export the entire visible moodboard as a PNG.
+- Clean up image files that are no longer used by any board or Inbox.
+
+## Install
+
+In SillyTavern:
+
+1. Open **Extensions**.
+2. Select **Install extension**.
+3. Paste:
 
 ```text
-SillyTavern/data/default-user/extensions/SillyTavern-Inspiration-Board/
+https://github.com/sogyboi/SillyTavern-Inspiration-Board
 ```
 
-If your SillyTavern user handle is not `default-user`, use that user's directory instead.
+4. Restart or fully reload SillyTavern.
 
-Restart SillyTavern after installing.
+Open it from the image icon in SillyTavern's top bar or from **Extensions → Inspiration Board → Open Inspiration Board**.
 
-## Opening the board
+## Updating from v0.1
 
-Use the **Inspiration Board** extension button or press:
+Use **Manage extensions → Inspiration Board → Update**, then fully reload SillyTavern. Existing v0.1 boards and character references are migrated automatically. Creating a backup before a major update is still recommended.
 
-```text
-Ctrl + Shift + B
+## AI reference analysis
+
+The AI button uses SillyTavern's built-in Image Captioning configuration. Set up a vision-capable provider/model under the Image Captioning extension first. The board analyzes only images in the Character Reference Basket and asks before using API credits.
+
+## Storage notes
+
+Board state is kept in browser storage and image blobs are kept in IndexedDB for the current SillyTavern browser/profile. Use **Backup** to move everything to another browser or device. Browser cleanup, app-data clearing, or using another SillyTavern URL can create a separate storage area.
+
+## Development
+
+Requires Node.js 20 or newer for tests.
+
+```bash
+npm test
+npm run check
 ```
 
-## Multi-photo workflow on Android
+The extension is plain browser JavaScript and does not require a server plugin or build step.
 
-1. Open Inspiration Board.
-2. Tap **Add Photos** or the large `+` button.
-3. Android's photo picker opens.
-4. Select multiple saved images.
-5. Confirm your selection.
-6. Every selected image is imported and arranged around the current canvas position.
+## License
 
-Images remain full-quality in local storage. Smaller thumbnails are used on the live board for speed.
-
-## Character workflow
-
-Tap an image's `•••` menu to mark it as a face, outfit, hair, accessory, mood, or general reference. Add important images to the Character References list and choose one as the Main Portrait.
-
-Open the **Character Creator** drawer at the bottom to fill in the character fields. **Send Draft to SillyTavern Character Creator** transfers the draft to SillyTavern's normal creator so you can review and save it normally.
-
-## Data and backups
-
-The extension stores original image blobs in browser IndexedDB. Board layout/state is stored locally in the same browser profile.
-
-Use **Backup** before clearing browser data or moving devices. The backup contains the board state and the original image files. **Restore** replaces the current Inspiration Board data with the chosen backup.
-
-## Notes about Pinterest and similar sites
-
-Direct page URLs are not reliable image sources because many sites block browser cross-origin image downloads. Saving the images to your phone first and then using multi-photo import is the recommended workflow.
-
-## Current version
-
-`0.1.0`
+MIT
