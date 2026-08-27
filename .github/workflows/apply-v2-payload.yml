@@ -26,6 +26,7 @@ jobs:
           cat v2_payload.part* | base64 -d > /tmp/inspiration-board-v2.zip
           unzip -o /tmp/inspiration-board-v2.zip
           rm -f v2_payload.part*
+          rm -f .github/workflows/ci.yml
       - name: Verify release
         run: |
           npm test
