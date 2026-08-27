@@ -2,12 +2,13 @@ const SETTINGS_ID = 'inspiration_board_settings';
 const LAUNCHER_ID = 'ib-mobile-launcher';
 const STYLE_ID = 'ib-launcher-fix-style';
 const DIALOG_ID = 'ib-board-dialog-host';
-const VERSION = '0.1.3';
+const VERSION = '0.1.4';
 
 let boardModulePromise = null;
 let boardModule = null;
 let rootObserver = null;
 let bootTimer = null;
+let lastPointerActionAt = 0;
 
 function notify(message, type = 'info') {
   const toaster = globalThis.toastr;
@@ -189,7 +190,7 @@ async function loadBoardModule() {
 
   setStatus('Loading board code…');
   removeStaleBoardElements();
-  const moduleUrl = new URL('./index.js?v=0.1.3', import.meta.url).href;
+  const moduleUrl = new URL('./index.js?v=0.1.4', import.meta.url).href;
   boardModulePromise = import(moduleUrl)
     .then((module) => {
       if (typeof module.openBoard !== 'function' || typeof module.closeBoard !== 'function') {
@@ -279,13 +280,13 @@ function pulseFloatingLauncher() {
   notify('Floating Board button is enabled. Close the Extensions drawer to see it.', 'success');
 }
 
-function handleLauncherClick(event) {
+function runLauncherAction(event) {
   const openTarget = event.target.closest?.('[data-ib-open]');
   if (openTarget) {
     event.preventDefault();
     event.stopPropagation();
     void openBoardSafe();
-    return;
+    return true;
   }
 
   const launcherTarget = event.target.closest?.('[data-ib-show-launcher], [data-ib-launcher]');
@@ -293,7 +294,21 @@ function handleLauncherClick(event) {
     event.preventDefault();
     event.stopPropagation();
     pulseFloatingLauncher();
+    return true;
   }
+  return false;
+}
+
+function handleLauncherPointerUp(event) {
+  if (event.pointerType === 'mouse') return;
+  if (runLauncherAction(event)) lastPointerActionAt = Date.now();
+}
+
+function handleLauncherClick(event) {
+  // Android themes can suppress or delay click after touch. Pointer-up handles
+  // touch immediately; this ignores only its duplicate synthetic click.
+  if (event.detail > 0 && Date.now() - lastPointerActionAt < 700) return;
+  runLauncherAction(event);
 }
 
 function bootLauncher() {
@@ -303,12 +318,18 @@ function bootLauncher() {
 
   // Capture clicks before SillyTavern's drawer handlers. This also survives
   // themes or extensions that rebuild the settings panel after startup.
-  const previousHandler = globalThis.__inspirationBoardClickHandler;
-  if (typeof previousHandler === 'function') {
-    document.removeEventListener('click', previousHandler, true);
+  const previousClickHandler = globalThis.__inspirationBoardClickHandler;
+  const previousPointerHandler = globalThis.__inspirationBoardPointerHandler;
+  if (typeof previousClickHandler === 'function') {
+    document.removeEventListener('click', previousClickHandler, true);
   }
+  if (typeof previousPointerHandler === 'function') {
+    document.removeEventListener('pointerup', previousPointerHandler, true);
+  }
+  document.addEventListener('pointerup', handleLauncherPointerUp, true);
   document.addEventListener('click', handleLauncherClick, true);
   globalThis.__inspirationBoardClickHandler = handleLauncherClick;
+  globalThis.__inspirationBoardPointerHandler = handleLauncherPointerUp;
 
   clearInterval(bootTimer);
   let attempts = 0;
