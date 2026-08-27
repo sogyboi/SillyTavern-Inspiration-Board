@@ -7,7 +7,7 @@
   "js": "launcher.js",
   "css": "style.css",
   "author": "sogyboi",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "homePage": "https://github.com/sogyboi/SillyTavern-Inspiration-Board",
   "auto_update": true,
   "minimum_client_version": "1.12.0"
