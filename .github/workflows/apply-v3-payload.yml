@@ -23,9 +23,21 @@ jobs:
           node-version: 22
       - name: Unpack v0.3.0 release
         run: |
-          cat ibv3-small.part* | base64 -d > /tmp/inspiration-board-v3.zip
+          cat \
+            ibv3-small.part00 \
+            ibv3-small.part01 \
+            ibv3-small.part02 \
+            ibv3-small.part03 \
+            ibv3-fix.part06 \
+            ibv3-fix.part07 \
+            ibv3-small.part05 \
+            ibv3-small.part06 \
+            ibv3-small.part07 \
+            ibv3-small.part08 \
+            ibv3-small.part09 \
+            | base64 -d > /tmp/inspiration-board-v3.zip
           unzip -o /tmp/inspiration-board-v3.zip
-          rm -f ibv3-small.part* ibv3-trigger.txt
+          rm -f ibv3-small.part* ibv3-fix.part* ibv3-good.part* ibv3-trigger.txt
       - name: Verify release
         run: |
           npm test
