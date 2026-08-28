@@ -5,7 +5,7 @@ on:
     branches:
       - feature/v0.3.0-generation-studio
     paths:
-      - ibv3-small.part09
+      - ibv3-trigger.txt
 
 permissions:
   contents: write
@@ -25,7 +25,7 @@ jobs:
         run: |
           cat ibv3-small.part* | base64 -d > /tmp/inspiration-board-v3.zip
           unzip -o /tmp/inspiration-board-v3.zip
-          rm -f ibv3-small.part*
+          rm -f ibv3-small.part* ibv3-trigger.txt
       - name: Verify release
         run: |
           npm test
