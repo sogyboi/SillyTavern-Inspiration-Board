@@ -1,0 +1,43 @@
+name: Apply v0.3.0 payload
+
+on:
+  push:
+    branches:
+      - feature/v0.3.0-generation-studio
+    paths:
+      - ibv3-payload.part02
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/v0.3.0-generation-studio
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Unpack v0.3.0 release
+        run: |
+          cat ibv3-payload.part* | base64 -d > /tmp/inspiration-board-v3.zip
+          unzip -o /tmp/inspiration-board-v3.zip
+          rm -f ibv3-payload.part*
+      - name: Verify release
+        run: |
+          npm test
+          npm run check
+      - name: Commit release files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git commit -m "Release Inspiration Board v0.3.0"
+          git push origin HEAD:feature/v0.3.0-generation-studio
