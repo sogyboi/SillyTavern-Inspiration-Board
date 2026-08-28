@@ -5,7 +5,7 @@ on:
     branches:
       - feature/v0.3.0-generation-studio
     paths:
-      - ibv3-small.part16
+      - ibv3-small.part09
 
 permissions:
   contents: write
