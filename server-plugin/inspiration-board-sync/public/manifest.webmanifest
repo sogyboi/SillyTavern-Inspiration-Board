@@ -1,0 +1,27 @@
+{
+  "name": "Inspiration Board Inbox",
+  "short_name": "Board Inbox",
+  "description": "Share character reference images from Android into SillyTavern Inspiration Board.",
+  "id": "/api/plugins/inspiration-board-sync/app/",
+  "start_url": "/api/plugins/inspiration-board-sync/app/",
+  "scope": "/api/plugins/inspiration-board-sync/app/",
+  "display": "standalone",
+  "background_color": "#0b0b12",
+  "theme_color": "#7658e8",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ],
+  "share_target": {
+    "action": "/api/plugins/inspiration-board-sync/share-target",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url",
+      "files": [
+        { "name": "media", "accept": ["image/*"] }
+      ]
+    }
+  }
+}
