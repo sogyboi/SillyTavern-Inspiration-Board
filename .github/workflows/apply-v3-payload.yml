@@ -5,7 +5,7 @@ on:
     branches:
       - feature/v0.3.0-generation-studio
     paths:
-      - ibv3-payload.part02
+      - ibv3-small.part16
 
 permissions:
   contents: write
@@ -23,9 +23,9 @@ jobs:
           node-version: 22
       - name: Unpack v0.3.0 release
         run: |
-          cat ibv3-payload.part* | base64 -d > /tmp/inspiration-board-v3.zip
+          cat ibv3-small.part* | base64 -d > /tmp/inspiration-board-v3.zip
           unzip -o /tmp/inspiration-board-v3.zip
-          rm -f ibv3-payload.part*
+          rm -f ibv3-small.part*
       - name: Verify release
         run: |
           npm test
