@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.4
+
+- Replaced the Android Capture Browser native direct-save multipart request with a dedicated JSON capture path.
+- Added server-plugin `POST /capture-native` with a route-local JSON body limit, optional validated base64 image storage, and structured JSON errors.
+- Added the `native-json-capture` server capability and bumped Inspiration Board Sync to v0.5.4.
+- Kept the SillyTavern CSRF/session handshake and UI-thread-safe cookie handling from v0.5.3.
+- Reduced direct native image payloads to 12 MB; larger/blocked images fall back to source-link capture/Android Share.
+- Added a companion connection test that explicitly warns when the installed Termux server plugin is too old.
+- Added regression tests ensuring the native app no longer uses multipart for its purple `+` direct-save path.
+- Published `InspirationBoard-CaptureBrowser-v0.5.4.apk`.
+
 ## 0.5.3
 
 - Fixed direct saves failing with `All WebView methods must be called on the same thread`.

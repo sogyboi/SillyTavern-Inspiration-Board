@@ -25,6 +25,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import android.util.Base64
 import org.json.JSONObject
 import org.json.JSONTokener
 import java.io.ByteArrayOutputStream
@@ -46,7 +47,7 @@ class CaptureBrowserActivity : Activity() {
     private val prefs by lazy { getSharedPreferences("capture-browser", MODE_PRIVATE) }
 
     @Volatile
-    private var browserUserAgent = "Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 InspirationBoardCapture/0.5.3"
+    private var browserUserAgent = "Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 InspirationBoardCapture/0.5.4"
 
     private val providerHomes = mapOf(
         "pinterest" to "https://www.pinterest.com/",
@@ -176,7 +177,7 @@ class CaptureBrowserActivity : Activity() {
             mediaPlaybackRequiresUserGesture = true
             builtInZoomControls = false
             displayZoomControls = false
-            userAgentString = "$userAgentString InspirationBoardCapture/0.5.3"
+            userAgentString = "$userAgentString InspirationBoardCapture/0.5.4"
         }
         // WebView APIs are UI-thread-only. Snapshot the UA once for worker-thread HTTP calls.
         browserUserAgent = webView.settings.userAgentString
@@ -450,44 +451,56 @@ class CaptureBrowserActivity : Activity() {
         }
     }
 
-    private fun postCapture(server: String, context: PageCapture, target: String): SaveResult {
-        val session = fetchCsrfSession(server)
-        val downloaded = if (context.imageUrl.startsWith("http://") || context.imageUrl.startsWith("https://")) {
-            runCatching { downloadImage(context.imageUrl, context.pageUrl) }.getOrNull()
-        } else null
+private fun postCapture(server: String, context: PageCapture, target: String): SaveResult {
+    val session = fetchCsrfSession(server)
+    val downloaded = if (context.imageUrl.startsWith("http://") || context.imageUrl.startsWith("https://")) {
+        runCatching { downloadImage(context.imageUrl, context.pageUrl) }.getOrNull()
+    } else null
 
-        val boundary = "----IBCapture${UUID.randomUUID()}"
-        val endpoint = URL("$server/api/plugins/inspiration-board-sync/share-target")
-        val connection = endpoint.openConnection() as HttpURLConnection
-        connection.requestMethod = "POST"
-        connection.instanceFollowRedirects = false
-        connection.connectTimeout = 12_000
-        connection.readTimeout = 22_000
-        connection.doOutput = true
-        connection.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
-        connection.setRequestProperty("Accept", "application/json,text/html,*/*")
-        connection.setRequestProperty("X-CSRF-Token", session.token)
-        connection.setRequestProperty("Origin", server)
-        connection.setRequestProperty("Referer", "$server/")
-        if (session.cookie.isNotBlank()) connection.setRequestProperty("Cookie", session.cookie)
-
-        connection.outputStream.use { output ->
-            writeField(output, boundary, "title", context.title.ifBlank { "Captured inspiration" })
-            writeField(output, boundary, "text", "${buildMarker(context, target)}\n${context.pageUrl}")
-            writeField(output, boundary, "url", context.imageUrl.ifBlank { context.pageUrl })
-            if (downloaded != null) writeFile(output, boundary, downloaded)
-            output.write("--$boundary--\r\n".toByteArray())
+    val payload = JSONObject().apply {
+        put("title", context.title.ifBlank { "Captured inspiration" })
+        put("text", "${buildMarker(context, target)}\n${context.pageUrl}")
+        put("url", context.imageUrl.ifBlank { context.pageUrl })
+        if (downloaded != null) {
+            put("image", JSONObject().apply {
+                put("name", downloaded.fileName)
+                put("mime", downloaded.mime)
+                put("data", Base64.encodeToString(downloaded.bytes, Base64.NO_WRAP))
+            })
         }
-
-        val code = connection.responseCode
-        val responseText = readConnectionText(connection, code)
-        connection.disconnect()
-        if (code !in 200..399) {
-            val detail = responseText.trim().replace(Regex("\\s+"), " ").take(220)
-            throw IllegalStateException("SillyTavern HTTP $code${if (detail.isNotBlank()) ": $detail" else ""}")
-        }
-        return SaveResult(uploadedImage = downloaded != null)
     }
+
+    val endpoint = URL("$server/api/plugins/inspiration-board-sync/capture-native")
+    val connection = endpoint.openConnection() as HttpURLConnection
+    connection.requestMethod = "POST"
+    connection.instanceFollowRedirects = false
+    connection.connectTimeout = 12_000
+    connection.readTimeout = 25_000
+    connection.doOutput = true
+    connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+    connection.setRequestProperty("Accept", "application/json")
+    connection.setRequestProperty("X-CSRF-Token", session.token)
+    connection.setRequestProperty("Origin", server)
+    connection.setRequestProperty("Referer", "$server/")
+    connection.setRequestProperty("User-Agent", browserUserAgent)
+    if (session.cookie.isNotBlank()) connection.setRequestProperty("Cookie", session.cookie)
+
+    connection.outputStream.use { output ->
+        output.write(payload.toString().toByteArray(Charsets.UTF_8))
+    }
+
+    val code = connection.responseCode
+    val responseText = readConnectionText(connection, code)
+    connection.disconnect()
+    if (code !in 200..299) {
+        if (code == 404) throw IllegalStateException("Server plugin is too old for native save. Update inspiration-board-sync in Termux")
+        val jsonError = runCatching { JSONObject(responseText).optString("error") }.getOrDefault("").trim()
+        val fallback = responseText.replace(Regex("<[^>]+>"), " ").replace(Regex("\\s+"), " ").trim().take(220)
+        val detail = jsonError.ifBlank { fallback }
+        throw IllegalStateException("SillyTavern HTTP $code${if (detail.isNotBlank()) ": $detail" else ""}")
+    }
+    return SaveResult(uploadedImage = downloaded != null)
+}
 
     private fun fetchCsrfSession(server: String): StSession {
         val endpoint = URL("$server/csrf-token")
@@ -584,7 +597,7 @@ class CaptureBrowserActivity : Activity() {
                 connection.disconnect()
                 throw IllegalStateException("Selected URL is not an image")
             }
-        val bytes = readLimited(connection.inputStream, 30 * 1024 * 1024)
+        val bytes = readLimited(connection.inputStream, 12 * 1024 * 1024)
         connection.disconnect()
         val extension = when {
             mime.contains("png") -> "png"
@@ -605,7 +618,7 @@ class CaptureBrowserActivity : Activity() {
                 val read = stream.read(buffer)
                 if (read < 0) break
                 total += read
-                if (total > limit) throw IllegalStateException("Image is larger than 30 MB")
+                if (total > limit) throw IllegalStateException("Image is larger than 12 MB")
                 output.write(buffer, 0, read)
             }
             return output.toByteArray()
@@ -698,9 +711,13 @@ class CaptureBrowserActivity : Activity() {
                 val body = readConnectionText(connection, code)
                 connection.disconnect()
                 if (code !in 200..299) throw IllegalStateException("plugin status HTTP $code")
-                val version = runCatching { JSONObject(body).optString("version") }.getOrDefault("")
+                val status = runCatching { JSONObject(body) }.getOrElse { JSONObject() }
+                val version = status.optString("version").ifBlank { "unknown" }
+                val capabilities = status.optJSONArray("capabilities")
+                val supportsNative = (0 until (capabilities?.length() ?: 0)).any { capabilities?.optString(it) == "native-json-capture" }
+                if (!supportsNative) throw IllegalStateException("server plugin $version is too old; update inspiration-board-sync in Termux")
                 runOnUiThread {
-                    Toast.makeText(this, "Connected · Inspiration Board Sync ${version.ifBlank { "ready" }}", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, "Connected · Inspiration Board Sync $version · native save ready", Toast.LENGTH_LONG).show()
                     prefs.edit().putString("server", server).apply()
                 }
             } catch (error: Throwable) {
