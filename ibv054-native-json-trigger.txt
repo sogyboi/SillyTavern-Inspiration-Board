@@ -1,1 +1,1 @@
-apply v0.5.4 native JSON capture hotfix retry 2
+apply v0.5.4 native JSON capture hotfix retry 3
