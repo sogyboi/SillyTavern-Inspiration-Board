@@ -29,7 +29,9 @@ import {
 import {
   collectBoardReferenceItems,
   downloadGeneratedRecord,
+  enrichOpenRouterImagePricing,
   executeGenerationJob,
+  formatOpenRouterImagePrice,
   loadOpenRouterCredits,
   loadOpenRouterModels,
 } from './studio-openrouter-v3.js';
@@ -70,6 +72,8 @@ function runtimeFor(app) {
       latestCredits: null,
       installTimer: null,
       sharePollTimer: null,
+      liveJobChip: null,
+      lastDispatchToastJobId: null,
     });
   }
   return runtimes.get(app);
@@ -81,6 +85,71 @@ function toast(app, message, type = 'info') {
 
 function currentStudio(app) {
   return ensureStudio(app.activeBoard());
+}
+
+function elapsedLabel(job) {
+  const start = job?.dispatchedAt || job?.startedAt || job?.createdAt;
+  if (!start || !['running'].includes(job?.status)) return '';
+  const seconds = Math.max(0, Math.floor((Date.now() - start) / 1000));
+  return `${seconds}s`;
+}
+
+function liveStatusJob(studio) {
+  const jobs = studio?.queue || [];
+  const running = jobs.find(job => job.status === 'running');
+  if (running) return running;
+  const queued = jobs.filter(job => job.status === 'queued').sort((a, b) => a.createdAt - b.createdAt)[0];
+  if (queued) return queued;
+  return jobs
+    .filter(job => ['done', 'failed', 'cancelled'].includes(job.status) && Date.now() - (job.updatedAt || 0) < 10_000)
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0] || null;
+}
+
+function liveJobTitle(job) {
+  if (!job) return '';
+  if (job.status === 'queued') return 'Queued · waiting to send';
+  if (job.status === 'done') return `Done ✓ · ${job.resultImageIds?.length || job.count || 1} image(s)`;
+  if (job.status === 'failed') return 'Generation failed';
+  if (job.status === 'cancelled') return 'Generation cancelled';
+  const phase = job.progressPhase || '';
+  if (phase === 'preparing' || phase === 'ready') return 'Preparing request';
+  if (phase === 'sending') return 'Sending request…';
+  if (phase === 'dispatched') return 'Request dispatched ✓';
+  if (phase === 'response') return 'OpenRouter responded ✓';
+  if (phase === 'received' || phase === 'store') return 'Image received · saving';
+  if (phase === 'attempt') return 'Generating · fallback attempt';
+  return 'Generating…';
+}
+
+function refreshLiveJobChip(app) {
+  const runtime = runtimeFor(app);
+  if (!app?.root?.isConnected) {
+    if (runtime.liveJobChip) runtime.liveJobChip.hidden = true;
+    return;
+  }
+  let chip = runtime.liveJobChip;
+  if (!chip?.isConnected) {
+    chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'ib3-live-job';
+    chip.dataset.ib3LiveJob = '';
+    chip.hidden = true;
+    chip.onclick = () => openQueue(app);
+    document.body.appendChild(chip);
+    runtime.liveJobChip = chip;
+  }
+  const job = liveStatusJob(currentStudio(app));
+  if (!job) {
+    chip.hidden = true;
+    return;
+  }
+  chip.hidden = false;
+  chip.className = `ib3-live-job ${job.status}`;
+  const icon = queueStatusIcon(job.status);
+  const elapsed = elapsedLabel(job);
+  const model = String(job.model || '').split('/').pop() || 'OpenRouter';
+  const detail = job.error || job.progress || `${job.count || 1} image(s)`;
+  chip.innerHTML = `<span class="ib3-live-icon">${icon}</span><span class="ib3-live-copy"><b>${escapeHtml(liveJobTitle(job))}${elapsed ? ` · ${elapsed}` : ''}</b><small>${escapeHtml(model)} · ${escapeHtml(detail)}</small></span>`;
 }
 
 function selectedImageItems(app) {
@@ -154,6 +223,8 @@ function injectStudioStyles() {
     .ib3-recipe-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.ib3-recipe{display:grid;grid-template-columns:34px 1fr;grid-template-rows:auto auto;gap:2px 7px;text-align:left;min-height:70px;padding:9px;border:1px solid var(--ib2-line);border-radius:13px;background:#171722;color:var(--ib2-text)}.ib3-recipe>span{grid-row:1/3;display:grid;place-items:center;font-size:24px;color:#baa7ff}.ib3-recipe small{font-size:9px;color:var(--ib2-muted);line-height:1.25}.ib3-recipe.selected{border-color:#8d6dff;background:linear-gradient(135deg,#33275d,#1b1830);box-shadow:0 0 0 2px #8d6dff22}
     .ib3-studio-layout{display:grid;grid-template-columns:minmax(250px,.8fr) minmax(340px,1.5fr);gap:10px}.ib3-studio-sidebar{max-height:70vh;overflow:auto}.ib3-prompt-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.ib3-prompt-fields .wide{grid-column:1/-1}.ib3-field{display:flex;flex-direction:column;gap:4px;color:var(--ib2-muted);font-size:10px}.ib3-field textarea{min-height:70px;resize:vertical}.ib3-final-prompt{width:100%;min-height:170px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:10px;line-height:1.45}
     .ib3-model-row{display:grid;grid-template-columns:1fr auto;gap:7px;align-items:end}.ib3-badges{display:flex;gap:4px;flex-wrap:wrap}.ib3-badge{padding:3px 6px;border-radius:999px;border:1px solid #45445a;font-size:8px;color:#bbb8cb;background:#11111a}.ib3-badge.good{border-color:#326348;color:#91f2b1}.ib3-badge.warn{border-color:#73562f;color:#ffd08b}.ib3-cost-box{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:8px}.ib3-cost-box div{padding:7px;border:1px solid var(--ib2-line);border-radius:10px;background:#101018}.ib3-cost-box span{display:block;font-size:8px;color:var(--ib2-muted)}.ib3-cost-box b{font-size:11px}
+    .ib3-model-search-wrap{position:relative;margin-top:7px}.ib3-model-search{width:100%;box-sizing:border-box;border:1px solid var(--ib2-line);border-radius:10px;background:#11111a;color:var(--ib2-text);padding:9px 10px;outline:none}.ib3-model-search:focus{border-color:var(--ib3-purple)}.ib3-model-results{position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:12;display:grid;gap:3px;max-height:290px;overflow:auto;padding:5px;border:1px solid #46415e;border-radius:11px;background:#0e0e16;box-shadow:0 16px 35px #000a}.ib3-model-results[hidden]{display:none}.ib3-model-result{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;width:100%;padding:8px 9px;border:0;border-radius:8px;background:#171722;color:var(--ib2-text);text-align:left}.ib3-model-result:hover,.ib3-model-result.selected{background:#2b2447}.ib3-model-result span{display:flex;flex-direction:column;min-width:0}.ib3-model-result b,.ib3-model-result small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.ib3-model-result b{font-size:10px}.ib3-model-result small{font-size:8px;color:var(--ib2-muted)}.ib3-model-price{font-size:9px;color:#a9f3c3;white-space:nowrap}.ib3-model-price.pending{color:#bbb8cb}.ib3-price-detail{margin-top:6px;min-height:18px;font-size:8px;line-height:1.35;color:var(--ib2-muted)}
+    .ib3-live-job{position:fixed;right:max(14px,env(safe-area-inset-right));bottom:max(16px,calc(env(safe-area-inset-bottom) + 10px));z-index:2147482000;display:grid;grid-template-columns:34px minmax(0,1fr);gap:9px;align-items:center;width:min(330px,calc(100vw - 28px));padding:9px 11px;border:1px solid #5d4c93;border-radius:15px;background:#151421f2;color:#fff;box-shadow:0 12px 36px #000b;backdrop-filter:blur(12px);text-align:left}.ib3-live-job[hidden]{display:none}.ib3-live-job.done{border-color:#377451}.ib3-live-job.failed,.ib3-live-job.cancelled{border-color:#8b3e51}.ib3-live-icon{display:grid;place-items:center;width:32px;height:32px;border-radius:50%;background:#29253b;font-size:18px}.ib3-live-job.running .ib3-live-icon{animation:ib3-pulse 1.1s ease-in-out infinite}.ib3-live-copy{display:flex;flex-direction:column;gap:2px;min-width:0}.ib3-live-copy b,.ib3-live-copy small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.ib3-live-copy b{font-size:10px}.ib3-live-copy small{font-size:8px;color:#c1bdd0}@keyframes ib3-pulse{50%{transform:scale(.88);opacity:.65}}
     .ib3-ref-groups{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}.ib3-ref-group{padding:8px;border:1px solid var(--ib2-line);border-radius:11px;background:#11111a;min-width:0}.ib3-ref-group>b{font-size:9px;color:#c3b5f5}.ib3-ref-chips{display:flex;gap:5px;overflow-x:auto;margin-top:6px}.ib3-ref-chip{position:relative;flex:0 0 50px;height:62px;border-radius:8px;overflow:hidden;border:1px solid #3d3c50}.ib3-ref-chip img{width:100%;height:100%;object-fit:cover}.ib3-ref-chip span{position:absolute;left:2px;right:2px;bottom:2px;padding:2px;background:#000c;border-radius:4px;font-size:7px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .ib3-warning-list{display:grid;gap:5px}.ib3-warning-line{display:flex;gap:7px;align-items:flex-start;padding:6px 8px;border-radius:9px;background:#3d2915aa;border:1px solid #72522d;font-size:9px;color:#ffd18d}.ib3-warning-line.info{background:#17253aaa;border-color:#355276;color:#a9d2ff}.ib3-ok-line{padding:7px 9px;border-radius:9px;background:#17352299;border:1px solid #326a47;color:#a0ffc0;font-size:9px}
     .ib3-actions{display:flex;gap:7px;flex-wrap:wrap}.ib3-actions button{min-height:42px;padding:0 14px;border:1px solid var(--ib2-line);border-radius:11px;background:#20202e;color:var(--ib2-text)}.ib3-actions button.primary{border:0;background:linear-gradient(135deg,#9270ff,#5f41d1);color:white;font-weight:750}.ib3-actions button.accent{border-color:#397b58;background:#17452c;color:#a8ffc7}.ib3-actions button.danger{border-color:#713847;color:#ff9cad}
@@ -332,10 +403,35 @@ function capabilityBadges(model) {
   ].map(([label, value, essential]) => `<span class="ib3-badge ${value ? 'good' : essential ? 'warn' : ''}">${value ? '✓' : '–'} ${label}</span>`).join('');
 }
 
+function modelPriceLabel(model) {
+  if (model?.priceSummary) return formatOpenRouterImagePrice(model.priceSummary);
+  if (model?.pricingStatus === 'loading' || model?.pricingStatus === 'idle') return 'checking price…';
+  return 'price unavailable';
+}
+
+function modelOptionLabel(model) {
+  return `${model.name || model.id} · ${modelPriceLabel(model)}`;
+}
+
 function modelOptions(models, selected) {
   const list = [...models];
-  if (selected && !list.some(model => model.id === selected)) list.unshift({ id: selected, name: selected, capabilities: inferModelCapabilities(selected), imagePrice: null });
-  return list.map(model => `<option value="${safeAttr(model.id)}" ${model.id === selected ? 'selected' : ''}>${escapeHtml(model.name || model.id)}</option>`).join('');
+  if (selected && !list.some(model => model.id === selected)) list.unshift({ id: selected, name: selected, capabilities: inferModelCapabilities(selected), imagePrice: null, pricingStatus: 'unavailable' });
+  return list.map(model => `<option value="${safeAttr(model.id)}" ${model.id === selected ? 'selected' : ''}>${escapeHtml(modelOptionLabel(model))}</option>`).join('');
+}
+
+function modelSearchResultsHtml(models, query, selected) {
+  const needle = String(query || '').trim().toLowerCase();
+  const rows = models.filter(model => {
+    if (!needle) return true;
+    const haystack = `${model.name || ''} ${model.id || ''} ${modelPriceLabel(model)}`.toLowerCase();
+    return needle.split(/\s+/).every(term => haystack.includes(term));
+  }).slice(0, 40);
+  if (!rows.length) return '<div class="ib2-muted" style="padding:8px">No image models match.</div>';
+  return rows.map(model => {
+    const price = modelPriceLabel(model);
+    const priceClass = model.priceSummary ? '' : ' pending';
+    return `<button type="button" class="ib3-model-result ${model.id === selected ? 'selected' : ''}" data-model-result="${safeAttr(model.id)}"><span><b>${escapeHtml(model.name || model.id)}</b><small>${escapeHtml(model.id)}</small></span><strong class="ib3-model-price${priceClass}">${escapeHtml(price)}</strong></button>`;
+  }).join('');
 }
 
 function multiSlotsHtml(app, slots) {
@@ -372,6 +468,8 @@ async function openGenerationStudio(app, options = {}) {
           </div></div>
           <div class="ib3-section"><div class="ib3-section-title"><b>Model</b><span data-model-loading>Loading OpenRouter…</span></div>
             <div class="ib3-model-row"><label class="ib3-field">OpenRouter model<select data-studio-model><option value="${safeAttr(draft.model)}">${escapeHtml(draft.model)}</option></select></label><button data-model-refresh title="Refresh">↻</button></div>
+            <div class="ib3-model-search-wrap"><input class="ib3-model-search" type="search" data-model-search placeholder="Search models, provider, $/img, token-priced…" autocomplete="off"><div class="ib3-model-results" data-model-results hidden></div></div>
+            <div class="ib3-price-detail" data-model-price-detail>OpenRouter image pricing will appear as it loads.</div>
             <div class="ib3-badges" data-model-badges></div>
             <div class="ib3-cost-box"><div><span>Per image</span><b data-cost-each>Unknown</b></div><div><span>Job estimate</span><b data-cost-total>Unknown</b></div><div><span>Credits left</span><b data-credit>Checking…</b></div></div>
           </div>
@@ -420,6 +518,8 @@ async function openGenerationStudio(app, options = {}) {
   let modelMetadata = null;
   let references = [];
   const modelSelect = modal.querySelector('[data-studio-model]');
+  const modelSearch = modal.querySelector('[data-model-search]');
+  const modelResults = modal.querySelector('[data-model-results]');
 
   const readDraft = () => {
     const next = { ...draft };
@@ -486,8 +586,24 @@ async function openGenerationStudio(app, options = {}) {
     modelMetadata = models.find(model => model.id === nextDraft.model) || null;
     const preset = modelPreset(nextDraft.model);
     const estimate = estimateGenerationCost({ modelMetadata, count: nextDraft.count, fallbackPrice: preset.fallbackPrice });
-    modal.querySelector('[data-cost-each]').textContent = estimate.known ? formatMoney(estimate.perImage) : 'Unknown';
-    modal.querySelector('[data-cost-total]').textContent = estimate.known ? formatMoney(estimate.total) : 'Unknown';
+    const summary = modelMetadata?.priceSummary;
+    const eachNode = modal.querySelector('[data-cost-each]');
+    const totalNode = modal.querySelector('[data-cost-total]');
+    const detailNode = modal.querySelector('[data-model-price-detail]');
+    if (summary?.exactFlat) {
+      eachNode.textContent = formatMoney(summary.flatPerImage);
+      totalNode.textContent = formatMoney(summary.flatPerImage * Math.max(1, nextDraft.count));
+    } else if (summary?.minimumPerImage !== null && summary?.minimumPerImage !== undefined) {
+      eachNode.textContent = summary.label;
+      totalNode.textContent = `from ${formatMoney(summary.minimumPerImage * Math.max(1, nextDraft.count))}`;
+    } else if (summary) {
+      eachNode.textContent = summary.label;
+      totalNode.textContent = 'Varies';
+    } else {
+      eachNode.textContent = estimate.known ? formatMoney(estimate.perImage) : (modelMetadata?.pricingStatus === 'loading' ? 'Checking…' : 'Unknown');
+      totalNode.textContent = estimate.known ? formatMoney(estimate.total) : (modelMetadata?.pricingStatus === 'loading' ? 'Checking…' : 'Unknown');
+    }
+    if (detailNode) detailNode.textContent = summary?.detail || (modelMetadata?.pricingStatus === 'loading' ? 'Checking OpenRouter provider pricing…' : 'Exact per-picture pricing is unavailable for this model. You can set a manual fallback price in Model Preset.');
     modal.querySelector('[data-model-badges]').innerHTML = capabilityBadges(modelMetadata || { id: nextDraft.model });
     return estimate;
   };
@@ -545,6 +661,31 @@ async function openGenerationStudio(app, options = {}) {
   modal.querySelector('[data-studio-conflicts]').onclick = () => openConflictReport(app, references, readDraft());
   modal.querySelector('[data-studio-queue-open]').onclick = () => openQueue(app);
 
+  const syncModelOption = model => {
+    const option = [...modelSelect.options].find(candidate => candidate.value === model.id);
+    if (option) option.textContent = modelOptionLabel(model);
+  };
+
+  const renderModelResults = () => {
+    if (!modelResults) return;
+    modelResults.innerHTML = modelSearchResultsHtml(models, modelSearch?.value || '', modelSelect.value);
+    modelResults.querySelectorAll('[data-model-result]').forEach(button => button.onclick = () => {
+      modelSelect.value = button.dataset.modelResult;
+      draft.model = modelSelect.value;
+      writePreset(modelSelect.value);
+      if (modelSearch) modelSearch.value = '';
+      modelResults.hidden = true;
+      updatePreview();
+    });
+  };
+
+  if (modelSearch) {
+    modelSearch.addEventListener('focus', () => { renderModelResults(); modelResults.hidden = false; });
+    modelSearch.addEventListener('input', () => { renderModelResults(); modelResults.hidden = false; });
+    modelSearch.addEventListener('keydown', event => { if (event.key === 'Escape') { modelResults.hidden = true; modelSearch.blur(); } });
+    modelSearch.addEventListener('blur', () => setTimeout(() => { if (modelResults) modelResults.hidden = true; }, 160));
+  }
+
   const loadModels = async force => {
     modal.querySelector('[data-model-loading]').textContent = 'Loading…';
     try {
@@ -552,15 +693,35 @@ async function openGenerationStudio(app, options = {}) {
       runtime.latestModels = models;
       modelSelect.innerHTML = modelOptions(models, readDraft().model);
       modelSelect.value = readDraft().model;
-      modal.querySelector('[data-model-loading]').textContent = `${models.length} image models`;
+      modal.querySelector('[data-model-loading]').textContent = `${models.length} image models · loading prices…`;
       writePreset(modelSelect.value);
+      renderModelResults();
       updatePreview();
+      void enrichOpenRouterImagePricing(models, {
+        selectedId: modelSelect.value,
+        onUpdate: (model, progress) => {
+          if (!modal.isConnected) return;
+          syncModelOption(model);
+          if (model.id === modelSelect.value) updatePreview();
+          if (!modelResults.hidden) renderModelResults();
+          const known = models.filter(entry => entry.priceSummary).length;
+          modal.querySelector('[data-model-loading]').textContent = progress.loaded >= progress.total
+            ? `${models.length} image models · ${known} priced`
+            : `${models.length} image models · pricing ${progress.loaded}/${progress.total}`;
+        },
+      }).then(() => {
+        if (!modal.isConnected) return;
+        const known = models.filter(entry => entry.priceSummary).length;
+        modal.querySelector('[data-model-loading]').textContent = `${models.length} image models · ${known} priced`;
+        renderModelResults();
+        updatePreview();
+      });
     } catch (error) {
       modal.querySelector('[data-model-loading]').textContent = error.message;
       toast(app, error.message, 'error');
     }
   };
-  modelSelect.onchange = () => { draft.model = modelSelect.value; writePreset(modelSelect.value); updatePreview(); };
+  modelSelect.onchange = () => { draft.model = modelSelect.value; writePreset(modelSelect.value); renderModelResults(); updatePreview(); };
   modal.querySelector('[data-model-refresh]').onclick = () => loadModels(true);
   void loadModels(false);
   void loadOpenRouterCredits().then(credits => {
@@ -620,16 +781,25 @@ async function openGenerationStudio(app, options = {}) {
   modal.querySelector('[data-studio-add-queue]').onclick = () => {
     const { job, preview } = buildJob();
     if (!confirmCost(preview)) return;
+    job.progressPhase = 'queued';
+    job.progress = 'Queued · waiting to send';
     studio.queue.push(job);
     app.scheduleSave();
+    refreshLiveJobChip(app);
     modal.querySelector('[data-studio-queue-open]').textContent = `Queue · ${studio.queue.filter(entry => ['queued','running'].includes(entry.status)).length}`;
-    toast(app, 'Generation job added to the queue.', 'success');
+    toast(app, 'Generation job queued · status is visible at the bottom of the board.', 'success');
   };
-  modal.querySelector('[data-studio-generate]').onclick = async () => {
+  modal.querySelector('[data-studio-generate]').onclick = async event => {
+    const button = event.currentTarget;
     const { job, preview } = buildJob();
     if (!confirmCost(preview)) return;
+    button.disabled = true;
+    button.textContent = '↗ Sending…';
+    job.progressPhase = 'queued';
+    job.progress = 'Queued · preparing to send';
     studio.queue.unshift(job);
     app.scheduleSave();
+    refreshLiveJobChip(app);
     modal.remove();
     await runQueue(app, { focusJobId: job.id, showComparison: true });
   };
@@ -658,6 +828,11 @@ async function runQueue(app, { focusJobId = null, showComparison = false } = {})
       job.status = 'running';
       job.startedAt = Date.now();
       job.updatedAt = Date.now();
+      job.progressPhase = 'preparing';
+      job.progress = 'Preparing references and request…';
+      job.dispatchedAt = null;
+      job.responseAt = null;
+      job.lastHttpStatus = null;
       job.attempt += 1;
       studio.queueState.runningJobId = job.id;
       runtime.controller = new AbortController();
@@ -669,14 +844,25 @@ async function runQueue(app, { focusJobId = null, showComparison = false } = {})
           signal: runtime.controller.signal,
           modelMetadata,
           onProgress: progress => {
+            job.progressPhase = progress.phase || job.progressPhase || 'running';
             job.progress = progress.message || progress.attempt?.reason || 'Working…';
+            if (progress.dispatchedAt) job.dispatchedAt = progress.dispatchedAt;
+            if (progress.responseAt) job.responseAt = progress.responseAt;
+            if (progress.httpStatus !== undefined) job.lastHttpStatus = progress.httpStatus;
             job.updatedAt = Date.now();
+            if (progress.phase === 'dispatched' && runtime.lastDispatchToastJobId !== job.id) {
+              runtime.lastDispatchToastJobId = job.id;
+              toast(app, 'Image request dispatched ✓ · waiting for OpenRouter.', 'success');
+            }
             refreshQueueModal(app);
+            refreshLiveJobChip(app);
           },
         });
         job.status = 'done';
         job.completedAt = Date.now();
         job.updatedAt = Date.now();
+        job.progressPhase = 'done';
+        job.progress = `${result.imageIds.length} image(s) saved`;
         job.resultImageIds = result.imageIds;
         job.fallbackLog = result.fallbackLog;
         job.actualCost = result.estimatedCost;
@@ -692,14 +878,19 @@ async function runQueue(app, { focusJobId = null, showComparison = false } = {})
         await app.renderItems?.();
         await app.renderInboxButton?.();
         refreshQueueModal(app);
+        refreshLiveJobChip(app);
+        toast(app, `Generation complete ✓ · ${result.imageIds.length} image(s) saved.`, 'success');
         if (showComparison || focusJobId === job.id) await openComparison(app, generation);
       } catch (error) {
         job.status = error?.name === 'AbortError' ? 'cancelled' : 'failed';
+        job.progressPhase = job.status;
         job.error = error.message || String(error);
+        job.progress = job.status === 'cancelled' ? 'Cancelled' : 'Failed';
         job.fallbackLog = error.fallbackLog || job.fallbackLog || [];
         job.updatedAt = Date.now();
         app.scheduleSave();
         refreshQueueModal(app);
+        refreshLiveJobChip(app);
         if (job.status === 'failed') toast(app, job.error, 'error');
       } finally {
         runtime.controller = null;
@@ -721,7 +912,7 @@ function queueModalContent(app) {
   return `
     <div class="ib3-queue-summary"><div><span>Queued</span><b>${jobs.filter(job => job.status === 'queued').length}</b></div><div><span>Running</span><b>${jobs.filter(job => job.status === 'running').length}</b></div><div><span>Finished</span><b>${jobs.filter(job => job.status === 'done').length}</b></div><div><span>Spent today</span><b>${formatMoney(getDailySpend(studio))}</b></div></div>
     <div class="ib3-actions"><button data-queue-run>▶ Run Queue</button><button data-queue-pause>${studio.queueState.paused ? '▶ Resume' : 'Ⅱ Pause'}</button><button data-queue-cancel>■ Cancel Current</button><button data-queue-clear>Clear Finished</button></div>
-    <div class="ib3-queue-list">${jobs.length ? jobs.map(job => `<article class="ib3-job ${job.status}" data-job-id="${job.id}"><div class="ib3-job-status">${queueStatusIcon(job.status)}</div><div class="ib3-job-main"><b>${escapeHtml(recipeById(job.recipeId).name)} · ${escapeHtml(job.model.split('/').pop())}</b><small>${job.status}${job.progress ? ` · ${escapeHtml(job.progress)}` : ''}${job.error ? ` · ${escapeHtml(job.error)}` : ''} · ${job.count} image(s) · ${job.estimatedCost === null ? 'cost unknown' : formatMoney(job.estimatedCost)}</small></div><div class="ib3-job-actions">${job.status === 'failed' || job.status === 'cancelled' || job.status === 'paused' ? '<button data-job-retry title="Retry">↻</button>' : ''}${job.status === 'done' ? '<button data-job-view title="View">◉</button>' : ''}<button data-job-remove title="Remove">×</button></div></article>`).join('') : '<p class="ib2-muted">The queue is empty.</p>'}</div>`;
+    <div class="ib3-queue-list">${jobs.length ? jobs.map(job => `<article class="ib3-job ${job.status}" data-job-id="${job.id}"><div class="ib3-job-status">${queueStatusIcon(job.status)}</div><div class="ib3-job-main"><b>${escapeHtml(recipeById(job.recipeId).name)} · ${escapeHtml(job.model.split('/').pop())}</b><small>${liveJobTitle(job)}${elapsedLabel(job) ? ` · ${elapsedLabel(job)}` : ''}${job.progress ? ` · ${escapeHtml(job.progress)}` : ''}${job.lastHttpStatus ? ` · HTTP ${job.lastHttpStatus}` : ''}${job.error ? ` · ${escapeHtml(job.error)}` : ''} · ${job.count} image(s) · ${job.estimatedCost === null ? 'cost unknown' : formatMoney(job.estimatedCost)}</small></div><div class="ib3-job-actions">${job.status === 'failed' || job.status === 'cancelled' || job.status === 'paused' ? '<button data-job-retry title="Retry">↻</button>' : ''}${job.status === 'done' ? '<button data-job-view title="View">◉</button>' : ''}<button data-job-remove title="Remove">×</button></div></article>`).join('') : '<p class="ib2-muted">The queue is empty.</p>'}</div>`;
 }
 
 function bindQueueModal(app, modal) {
@@ -816,7 +1007,7 @@ async function openComparison(app, generation) {
       else if (name === 'chat') await sendImageToCurrentChat(imageId, { title: recipeById(generation.recipeId).name, messageText: `[Generated image: ${recipeById(generation.recipeId).name}]` });
       else if (name === 'background') await setImageAsChatBackground(imageId);
       else if (name === 'creator') {
-        await moveResultToBoard(app, imageId);
+        await moveImageToBoard(app, imageId, generation);
         const boardItem = app.activeBoard().items.find(item => item.type === 'image' && item.imageId === imageId);
         if (boardItem) app.activeBoard().character.mainImageId = boardItem.id;
         app.drawerOpen = true;
@@ -952,24 +1143,25 @@ export function installGenerationStudio(app) {
   ensureStudio(app.activeBoard());
   ensureRailButtons(app);
   installSettingsPanelEnhancements();
-  if (!app[INSTALL_KEY]) {
-    app[INSTALL_KEY] = true;
-    app.openBlueprintStudio = () => openBlueprint(app);
-    app.openGenerationStudio = options => openGenerationStudio(app, options);
-    app.openGenerationQueue = () => openQueue(app);
-    app.openGenerationHistory = () => openHistory(app);
-    app.openCharacterGallery = () => openGallery(app);
-    app.openOrganizeStudio = () => openOrganizeStudio(app);
-    app.openSyncSharePanel = () => openSyncSharePanel(app);
-    app.openImageLab = () => openMediaTools(app, studioApiFor(app));
-    app.studioV3 = studioApiFor(app);
-  }
+  if (!app[INSTALL_KEY]) app[INSTALL_KEY] = true;
+  // Rebind these on every install so a cache-busted Studio update can replace older closures.
+  app.openBlueprintStudio = () => openBlueprint(app);
+  app.openGenerationStudio = options => openGenerationStudio(app, options);
+  app.openGenerationQueue = () => openQueue(app);
+  app.openGenerationHistory = () => openHistory(app);
+  app.openCharacterGallery = () => openGallery(app);
+  app.openOrganizeStudio = () => openOrganizeStudio(app);
+  app.openSyncSharePanel = () => openSyncSharePanel(app);
+  app.openImageLab = () => openMediaTools(app, studioApiFor(app));
+  app.studioV3 = studioApiFor(app);
+  refreshLiveJobChip(app);
   clearInterval(runtime.installTimer);
   runtime.installTimer = setInterval(() => {
     if (!app.root?.isConnected) return;
     ensureStudio(app.activeBoard());
     ensureRailButtons(app);
     installSettingsPanelEnhancements();
+    refreshLiveJobChip(app);
   }, 900);
   if (!runtime.sharePollTimer) {
     runtime.sharePollTimer = setInterval(() => { if (app.isOpen) void pollPendingShares(app); }, 5 * 60_000);

@@ -23,7 +23,7 @@ test('ensureStudio adds a complete versioned workspace without replacing board d
   const board = { id: 'b1', name: 'Althea', items: [{ id: 'i1' }], character: {} };
   const studio = ensureStudio(board);
   assert.equal(studio.version, 3);
-  assert.equal(STUDIO_VERSION, '0.3.0');
+  assert.equal(STUDIO_VERSION, '0.5.7');
   assert.equal(board.items.length, 1);
   assert.equal(studio.promptDraft.recipeId, 'portrait');
   assert.ok(Array.isArray(studio.queue));
@@ -118,7 +118,7 @@ test('model capability inference distinguishes image-edit and text-only style cl
 });
 
 test('cost estimation and daily spend bookkeeping are deterministic', () => {
-  const estimate = estimateGenerationCost({ modelMetadata: { pricing: { image: '0.04' } }, count: 3 });
+  const estimate = estimateGenerationCost({ modelMetadata: { priceSummary: { exactFlat: true, flatPerImage: 0.04 } }, count: 3 });
   assert.equal(estimate.known, true);
   assert.equal(estimate.total, 0.12);
   const studio = ensureStudio({ id: 'b', items: [], character: {} });
