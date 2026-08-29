@@ -1,4 +1,4 @@
-# Android Capture Browser (v0.5.2)
+# Android Capture Browser (v0.5.3)
 
 Inspiration Board v0.5 adds an optional Android companion browser for the fastest Pinterest/Cosmos capture workflow while keeping the reliable Android Share workflow from v0.4.1.
 
@@ -6,12 +6,16 @@ Inspiration Board v0.5 adds an optional Android companion browser for the fastes
 
 Pinterest and Cosmos can block iframe embedding, third-party cookies, browser-side page scanning, and image downloads inside SillyTavern. An Android WebView is much closer to a normal mobile browser and lets Inspiration Board own a floating save control. It still cannot force a provider to support WebView, so the real app/site and Android Share remain the fallback.
 
+## v0.5.3 thread-safety fix
+
+Native HTTP saving now snapshots the WebView user agent on the Android UI thread and marshals all CookieManager access back to that thread before worker-thread network requests. This fixes Android's `All WebView methods must be called on the same thread` failure while retaining the CSRF/session handshake and direct image upload.
+
 ## Install
 
-1. Update the SillyTavern Inspiration Board extension to v0.5.2 and restart/reload SillyTavern.
+1. Update the SillyTavern Inspiration Board extension to v0.5.3 and restart/reload SillyTavern.
 2. Open **Inspiration Board → Capture**.
 3. Tap **Install / update APK** in the Capture Browser banner.
-4. Install `InspirationBoard-CaptureBrowser-v0.5.2.apk` from the GitHub release.
+4. Install `InspirationBoard-CaptureBrowser-v0.5.3.apk` from the GitHub release.
 5. Return to Capture Center and tap **Capture Browser · Pinterest** or **Capture Browser · Cosmos**.
 
 The extension opens the companion with an `inspirationboard://browse` deep link containing the current SillyTavern origin and current board ID/name. You normally do not have to enter these manually.
@@ -49,13 +53,13 @@ The companion first tries to save directly to:
 /api/plugins/inspiration-board-sync/share-target
 ```
 
-SillyTavern protects POST endpoints with CSRF validation. Capture Browser v0.5.2 now performs the same handshake that a SillyTavern browser page relies on:
+SillyTavern protects POST endpoints with CSRF validation. Capture Browser v0.5.3 now performs the same handshake that a SillyTavern browser page relies on:
 
 1. GET `/csrf-token` from the configured SillyTavern origin.
 2. Preserve the cookie bound to that token.
 3. POST the capture with the bound cookie and `X-CSRF-Token` header.
 
-This fixes the v0.5.0 native-save failure where the APK posted directly without a CSRF token. That failure also used to show only the endpoint URL because Android attempted to open the failed response as a successful input stream. v0.5.2 reads the correct success/error stream and reports the real HTTP status and response body.
+This fixes the v0.5.0 native-save failure where the APK posted directly without a CSRF token. That failure also used to show only the endpoint URL because Android attempted to open the failed response as a successful input stream. v0.5.3 reads the correct success/error stream and reports the real HTTP status and response body.
 
 The settings screen includes **Test** for checking both the CSRF handshake and the Inspiration Board Sync `/status` endpoint.
 
@@ -78,4 +82,4 @@ The companion is intended to stay portrait-friendly on an unfolded foldable scre
 
 ## Existing server plugin
 
-v0.5.2 does not require a new server-plugin API. If `SillyTavern/plugins/inspiration-board-sync` from v0.4.0 is already installed and running, it remains compatible. The extension update and v0.5.2 APK are the new pieces.
+v0.5.3 does not require a new server-plugin API. If `SillyTavern/plugins/inspiration-board-sync` from v0.4.0 is already installed and running, it remains compatible. The extension update and v0.5.3 APK are the new pieces.

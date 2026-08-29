@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.3
+
+- Fixed direct saves failing with `All WebView methods must be called on the same thread`.
+- Removed direct WebView and CookieManager access from background network operations.
+- Snapshotted the browser user agent on the UI thread and marshalled cookie reads/writes safely through the UI thread.
+- Preserved the CSRF/session handshake, real HTTP diagnostics, image-byte uploads, and Android Share fallback.
+- Added regression tests that fail if worker-thread networking touches WebView or CookieManager directly.
+- Published `InspirationBoard-CaptureBrowser-v0.5.3.apk`.
+
 ## 0.5.0
 
 - Added an optional native Android **Capture Browser** companion for Pinterest, Cosmos, and general web inspiration.

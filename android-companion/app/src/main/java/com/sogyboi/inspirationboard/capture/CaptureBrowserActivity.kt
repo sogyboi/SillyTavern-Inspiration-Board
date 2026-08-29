@@ -8,6 +8,7 @@ import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
+import android.os.Looper
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -31,6 +32,7 @@ import java.io.OutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.UUID
+import java.util.concurrent.FutureTask
 import kotlin.concurrent.thread
 import kotlin.math.abs
 import kotlin.math.max
@@ -42,6 +44,9 @@ class CaptureBrowserActivity : Activity() {
     private lateinit var titleView: TextView
     private lateinit var bubble: TextView
     private val prefs by lazy { getSharedPreferences("capture-browser", MODE_PRIVATE) }
+
+    @Volatile
+    private var browserUserAgent = "Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 InspirationBoardCapture/0.5.3"
 
     private val providerHomes = mapOf(
         "pinterest" to "https://www.pinterest.com/",
@@ -171,8 +176,10 @@ class CaptureBrowserActivity : Activity() {
             mediaPlaybackRequiresUserGesture = true
             builtInZoomControls = false
             displayZoomControls = false
-            userAgentString = "$userAgentString InspirationBoardCapture/0.5.2"
+            userAgentString = "$userAgentString InspirationBoardCapture/0.5.3"
         }
+        // WebView APIs are UI-thread-only. Snapshot the UA once for worker-thread HTTP calls.
+        browserUserAgent = webView.settings.userAgentString
         webView.webChromeClient = WebChromeClient()
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
@@ -272,6 +279,25 @@ class CaptureBrowserActivity : Activity() {
     private fun normalizeServer(value: String): String {
         val clean = value.trim().trimEnd('/')
         return if (clean.isBlank()) "" else clean
+    }
+
+    private fun <T> uiValue(block: () -> T): T {
+        if (Looper.myLooper() == Looper.getMainLooper()) return block()
+        val task = FutureTask<T> { block() }
+        runOnUiThread(task)
+        return task.get()
+    }
+
+    private fun cookieFor(url: String): String =
+        uiValue { CookieManager.getInstance().getCookie(url).orEmpty() }
+
+    private fun storeCookies(url: String, values: List<String>) {
+        if (values.isEmpty()) return
+        uiValue {
+            val manager = CookieManager.getInstance()
+            values.forEach { manager.setCookie(url, it) }
+            manager.flush()
+        }
     }
 
     private fun updateTitle() {
@@ -471,9 +497,9 @@ class CaptureBrowserActivity : Activity() {
         connection.connectTimeout = 10_000
         connection.readTimeout = 12_000
         connection.setRequestProperty("Accept", "application/json")
-        connection.setRequestProperty("User-Agent", webView.settings.userAgentString)
+        connection.setRequestProperty("User-Agent", browserUserAgent)
 
-        val existingCookie = CookieManager.getInstance().getCookie(server).orEmpty()
+        val existingCookie = cookieFor(server)
         if (existingCookie.isNotBlank()) connection.setRequestProperty("Cookie", existingCookie)
 
         val code = connection.responseCode
@@ -484,8 +510,7 @@ class CaptureBrowserActivity : Activity() {
             .flatten()
             .mapNotNull { header -> header.substringBefore(';').trim().takeIf { it.contains('=') } }
 
-        for (header in setCookies) CookieManager.getInstance().setCookie(server, header)
-        CookieManager.getInstance().flush()
+        storeCookies(server, setCookies)
         connection.disconnect()
 
         if (code !in 200..299) {
@@ -499,7 +524,7 @@ class CaptureBrowserActivity : Activity() {
         val cookies = buildList {
             if (existingCookie.isNotBlank()) add(existingCookie)
             addAll(setCookies)
-            val webViewCookie = CookieManager.getInstance().getCookie(server).orEmpty()
+            val webViewCookie = cookieFor(server)
             if (webViewCookie.isNotBlank()) add(webViewCookie)
         }
             .flatMap { value -> value.split(';').map(String::trim) }
@@ -544,10 +569,10 @@ class CaptureBrowserActivity : Activity() {
         connection.instanceFollowRedirects = true
         connection.connectTimeout = 10_000
         connection.readTimeout = 18_000
-        connection.setRequestProperty("User-Agent", webView.settings.userAgentString)
+        connection.setRequestProperty("User-Agent", browserUserAgent)
         connection.setRequestProperty("Accept", "image/avif,image/webp,image/apng,image/*,*/*;q=0.8")
         if (referer.startsWith("http://") || referer.startsWith("https://")) connection.setRequestProperty("Referer", referer)
-        CookieManager.getInstance().getCookie(value)?.takeIf { it.isNotBlank() }?.let { connection.setRequestProperty("Cookie", it) }
+        cookieFor(value).takeIf { it.isNotBlank() }?.let { connection.setRequestProperty("Cookie", it) }
         val code = connection.responseCode
         if (code !in 200..299) {
             readConnectionText(connection, code)

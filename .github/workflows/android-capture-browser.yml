@@ -31,22 +31,22 @@ jobs:
       - name: Build APK
         run: |
           gradle -p android-companion :app:assembleDebug
-          cp android-companion/app/build/outputs/apk/debug/app-debug.apk InspirationBoard-CaptureBrowser-v0.5.2.apk
+          cp android-companion/app/build/outputs/apk/debug/app-debug.apk InspirationBoard-CaptureBrowser-v0.5.3.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: InspirationBoard-CaptureBrowser-v0.5.2
-          path: InspirationBoard-CaptureBrowser-v0.5.2.apk
+          name: InspirationBoard-CaptureBrowser-v0.5.3
+          path: InspirationBoard-CaptureBrowser-v0.5.3.apk
       - name: Publish APK release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="capture-browser-v0.5.2"
-          APK="InspirationBoard-CaptureBrowser-v0.5.2.apk"
+          TAG="capture-browser-v0.5.3"
+          APK="InspirationBoard-CaptureBrowser-v0.5.3.apk"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "$APK" --clobber
           else
             gh release create "$TAG" "$APK" \
-              --title "Inspiration Board Capture Browser v0.5.2" \
-              --notes "Fixes direct saving to SillyTavern by performing the required /csrf-token handshake, preserving the bound session cookie, and sending X-CSRF-Token with native capture uploads. Also reports real HTTP errors instead of only the endpoint URL. Pinterest/Cosmos WebView browsing, the floating save button, and App/Site + Android Share fallback remain available. This beta APK uses Android debug signing."
+              --title "Inspiration Board Capture Browser v0.5.3" \
+              --notes "Fixes native direct saves failing when WebView or CookieManager APIs were touched from a background thread. The browser user agent is now captured on the Android UI thread and all cookie access is marshalled safely to that thread while preserving the v0.5.2 CSRF/session handshake, direct image upload, HTTP diagnostics, and Android Share fallback. This beta APK uses Android debug signing."
           fi
