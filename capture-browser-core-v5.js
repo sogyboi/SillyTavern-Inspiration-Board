@@ -1,6 +1,6 @@
-export const CAPTURE_BROWSER_VERSION = '0.5.3';
+export const CAPTURE_BROWSER_VERSION = '0.5.4';
 export const CAPTURE_BROWSER_PACKAGE = 'com.sogyboi.inspirationboard.capture';
-export const CAPTURE_BROWSER_RELEASE = 'https://github.com/sogyboi/SillyTavern-Inspiration-Board/releases/tag/capture-browser-v0.5.3';
+export const CAPTURE_BROWSER_RELEASE = 'https://github.com/sogyboi/SillyTavern-Inspiration-Board/releases/tag/capture-browser-v0.5.4';
 
 const PROVIDER_URLS = Object.freeze({
   pinterest: 'https://www.pinterest.com/',

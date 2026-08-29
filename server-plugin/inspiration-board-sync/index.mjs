@@ -12,11 +12,12 @@ export const info = Object.freeze({
   description: 'Per-user server storage, Android share-target inbox, and safe remote image/page bridge for SillyTavern Inspiration Board.',
 });
 
-const VERSION = '0.4.0';
+const VERSION = '0.5.4';
 const PLUGIN_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(PLUGIN_DIR, 'public');
 const MAX_PAGE_BYTES = 6 * 1024 * 1024;
 const MAX_REMOTE_IMAGE_BYTES = 40 * 1024 * 1024;
+const MAX_NATIVE_IMAGE_BYTES = 12 * 1024 * 1024;
 const REMOTE_TIMEOUT_MS = 18_000;
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -350,7 +351,7 @@ export async function init(router) {
         workspaceCount: workspaces.length,
         pendingShareCount: shares.length,
         shareTargetUrl: `/api/plugins/${info.id}/app/`,
-        capabilities: ['workspace-sync', 'android-share', 'remote-page-resolver', 'remote-image-proxy'],
+        capabilities: ['workspace-sync', 'android-share', 'remote-page-resolver', 'remote-image-proxy', 'native-json-capture'],
       });
     } catch (error) {
       console.error('[Inspiration Board Sync] status failed', error);
@@ -460,6 +461,54 @@ export async function init(router) {
       res.json({ deleted: true, id });
     } catch (error) { console.error(error); res.status(500).json({ error: error.message }); }
   });
+
+router.post('/capture-native', express.json({ limit: '20mb' }), async (req, res) => {
+  try {
+    await ensureDirectories(req);
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
+    const folder = path.join(shareRoot(req), id);
+    await fs.mkdir(folder, { recursive: true });
+    const files = [];
+
+    if (body.image && typeof body.image === 'object' && body.image.data) {
+      const mime = String(body.image.mime || '').slice(0, 120).toLowerCase();
+      if (!mime.startsWith('image/')) return res.status(400).json({ error: 'Native capture image type is not an image.' });
+      const encoded = String(body.image.data || '').replace(/\s+/g, '');
+      if (!/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) return res.status(400).json({ error: 'Native capture image data is not valid base64.' });
+      const bytes = Buffer.from(encoded, 'base64');
+      if (!bytes.length) return res.status(400).json({ error: 'Native capture image is empty.' });
+      if (bytes.length > MAX_NATIVE_IMAGE_BYTES) return res.status(413).json({ error: 'Native capture image is larger than 12 MB.' });
+      const rawName = String(body.image.name || 'capture.jpg').slice(0, 220);
+      const extFromName = path.extname(rawName).replace(/[^a-zA-Z0-9.]/g, '').slice(0, 9);
+      const extFromMime = mime.includes('png') ? '.png'
+        : mime.includes('webp') ? '.webp'
+        : mime.includes('gif') ? '.gif'
+        : mime.includes('avif') ? '.avif'
+        : '.jpg';
+      const extension = extFromName || extFromMime;
+      const stem = safeId(path.basename(rawName, path.extname(rawName)), 'capture');
+      const filename = `01-${stem}${extension}`;
+      await fs.writeFile(path.join(folder, filename), bytes);
+      files.push({ filename, name: rawName, type: mime, size: bytes.length });
+    }
+
+    const text = String(body.text || '').slice(0, 20_000);
+    const metadata = {
+      id,
+      title: String(body.title || 'Captured inspiration').slice(0, 200),
+      text,
+      url: firstHttpUrl(body.url, text),
+      createdAt: Date.now(),
+      files,
+    };
+    await atomicWrite(path.join(folder, 'metadata.json'), JSON.stringify(metadata, null, 2));
+    res.json({ ok: true, id, fileCount: files.length });
+  } catch (error) {
+    console.error('[Inspiration Board Sync] native capture failed', error);
+    res.status(500).json({ error: `Could not save native capture: ${error.message}` });
+  }
+});
 
   router.post('/share-target', upload.array('media', 32), async (req, res) => {
     try {
