@@ -1,6 +1,6 @@
-import './launcher-v30.js?v=0.4.1';
-import { installBrowseHub } from './browse-hub-v4.js?v=0.4.1';
-import { installCaptureFirst } from './capture-first-v41.js?v=0.4.1';
+import './launcher-v30.js?v=0.5.1';
+import { installBrowseHub } from './browse-hub-v4.js?v=0.5.1';
+import { installCaptureFirst } from './capture-first-v41.js?v=0.5.1';
 
 const VERSION = '0.4.1';
 let timer = null;
