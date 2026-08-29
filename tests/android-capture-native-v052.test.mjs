@@ -22,10 +22,10 @@ test('native capture keeps real HTTP diagnostics instead of opening inputStream 
   assert.doesNotMatch(activity, /connection\.inputStream\.takeIf/);
 });
 
-test('manifest launches the CSRF-aware v0.5.4 activity', () => {
+test('manifest launches the CSRF-aware v0.5.6 activity', () => {
   assert.match(manifest, /\.CaptureBrowserActivity/);
   assert.match(manifest, /inspirationboard/);
-  assert.match(gradle, /versionName = "0\.5\.4"/);
+  assert.match(gradle, /versionName = "0\.5\.6"/);
 });
 
 test('native capture still preserves Android Share fallback', () => {
