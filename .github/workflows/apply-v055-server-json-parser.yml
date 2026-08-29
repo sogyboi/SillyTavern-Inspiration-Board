@@ -1,0 +1,37 @@
+name: Apply v0.5.5 server JSON parser hotfix
+
+on:
+  push:
+    branches:
+      - hotfix/v0.5.5-server-json-parser
+    paths:
+      - ibv055-server-parser-trigger.txt
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: hotfix/v0.5.5-server-json-parser
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Apply hotfix
+        run: python tools/apply_v055_server_parser.py
+      - name: Verify
+        run: |
+          npm test
+          npm run check
+      - name: Commit verified product changes
+        run: |
+          git checkout HEAD -- .github/workflows/apply-v055-server-json-parser.yml ibv055-server-parser-trigger.txt tools/apply_v055_server_parser.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Hotfix v0.5.5 SillyTavern JSON parser compatibility"
+          git push origin HEAD:hotfix/v0.5.5-server-json-parser
