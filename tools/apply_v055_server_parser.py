@@ -35,6 +35,21 @@ text = p.read_text().replace('"version": "0.5.4"', '"version": "0.5.5"', 1)
 text = text.replace('node --check launcher-v54.js &&', 'node --check launcher-v54.js && node --check launcher-v55.js &&', 1)
 p.write_text(text)
 
+# Update the v0.5.4 native JSON test so it validates the endpoint contract without
+# requiring the redundant route-level parser that caused the on-device HTTP 500.
+p = Path('tests/native-json-capture-v054.test.mjs')
+text = p.read_text()
+old_assert = "  assert.match(plugin, /router\\.post\\('\\/capture-native', express\\.json\\(\\{ limit: '20mb' \\}\\)/);\n"
+new_assert = (
+    "  assert.match(plugin, /router\\.post\\('\\/capture-native', async \\(req, res\\) =>/);\n"
+    "  assert.doesNotMatch(plugin, /router\\.post\\('\\/capture-native',\\s*express\\.json/);\n"
+)
+if old_assert not in text:
+    raise SystemExit('stale v0.5.4 capture-native parser assertion not found')
+text = text.replace(old_assert, new_assert, 1)
+text = text.replace('assert.match(pluginPackage, /"version": "0\\.5\\.4"/);', 'assert.match(pluginPackage, /"version": "0\\.5\\.5"/);', 1)
+p.write_text(text)
+
 # Regression test: ST owns JSON parsing globally, so capture-native must not install another parser.
 test = Path('tests/server-json-parser-v055.test.mjs')
 test.write_text("""import test from 'node:test';
