@@ -32,7 +32,12 @@ jobs:
         run: |
           python tools/repair_v053_script.py
           python tools/apply_v053.py
-          rm -f tools/repair_v053_script.py
+          git checkout HEAD -- \
+            .github/workflows/android-capture-browser.yml \
+            .github/workflows/apply-v053-thread-hotfix.yml \
+            ibv053-thread-trigger.txt \
+            tools/apply_v053.py \
+            tools/repair_v053_script.py
       - name: Verify extension
         run: |
           npm test
@@ -41,6 +46,7 @@ jobs:
         run: gradle -p android-companion :app:assembleDebug
       - name: Commit hotfix
         run: |
+          rm -rf android-companion/.gradle android-companion/app/build
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
