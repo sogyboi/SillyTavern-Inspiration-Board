@@ -6,27 +6,92 @@
   <meta name="theme-color" content="#7658e8">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg">
-  <title>Inspiration Board Inbox</title>
+  <title>Inspiration Board Capture</title>
   <style>
-    :root{color-scheme:dark;font-family:Inter,system-ui,sans-serif;background:#0b0b12;color:#f5f3ff}*{box-sizing:border-box}body{margin:0;min-height:100dvh;display:grid;place-items:center;padding:24px;background:radial-gradient(circle at 80% 0,#7658e833,transparent 40%),#0b0b12}.card{width:min(560px,100%);padding:22px;border:1px solid #343447;border-radius:24px;background:#15151fee;box-shadow:0 24px 70px #0009}.brand{display:flex;gap:14px;align-items:center}.brand img{width:64px;height:64px}.brand h1{margin:0;font-size:24px}.brand p{margin:4px 0 0;color:#aaa7bc}.status{margin:18px 0;padding:13px;border:1px solid #3b3b50;border-radius:14px;background:#0f0f18;line-height:1.45}.status.good{border-color:#356d4a;color:#a6ffc2}.actions{display:grid;gap:10px}button,a.button{min-height:48px;border:0;border-radius:14px;padding:0 16px;background:linear-gradient(135deg,#8e6cff,#6042d2);color:white;font-weight:750;font-size:15px;display:flex;align-items:center;justify-content:center;text-decoration:none}button.secondary{background:#242435;border:1px solid #3b3b50}small{display:block;margin-top:16px;color:#8e8ba1;line-height:1.45}code{word-break:break-all;color:#c6b8ff}
+    :root{color-scheme:dark;font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#0b0b12;color:#f5f3ff}*{box-sizing:border-box}body{margin:0;min-height:100dvh;padding:max(18px,env(safe-area-inset-top)) 14px max(18px,env(safe-area-inset-bottom));background:radial-gradient(circle at 80% 0,#7658e83b,transparent 42%),#0b0b12}.shell{width:min(680px,100%);margin:auto;display:grid;gap:12px}.card{padding:17px;border:1px solid #343447;border-radius:22px;background:#15151fee;box-shadow:0 18px 52px #0008}.brand{display:flex;gap:12px;align-items:center}.brand img{width:58px;height:58px}.brand h1{margin:0;font-size:21px}.brand p{margin:4px 0 0;color:#aaa7bc;font-size:12px}.status{padding:12px;border:1px solid #3b3b50;border-radius:13px;background:#0f0f18;line-height:1.45;font-size:13px}.status.good{border-color:#356d4a;background:#102219;color:#b2ffca}.status.warn{border-color:#725833;background:#251c10;color:#ffd99b}.actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}button,a.button{min-height:48px;border:0;border-radius:13px;padding:0 13px;background:linear-gradient(135deg,#8e6cff,#6042d2);color:white;font-weight:760;font-size:14px;display:flex;align-items:center;justify-content:center;text-decoration:none;text-align:center}button.secondary,a.secondary{background:#242435;border:1px solid #3b3b50}.steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.step{padding:10px;border:1px solid #2d2d3e;border-radius:13px;background:#101018}.step b{display:grid;place-items:center;width:26px;height:26px;border-radius:9px;background:#2d2550;color:#d9ceff;margin-bottom:7px}.step span{font-size:10px;color:#aaa7bc;line-height:1.45}.head{display:flex;align-items:center;gap:8px;margin-bottom:8px}.head h2{flex:1;margin:0;font-size:14px}.head button{min-height:34px;padding:0 10px;font-size:10px}.list{display:grid;gap:7px}.row{display:grid;grid-template-columns:1fr auto;gap:8px;padding:9px;border:1px solid #303043;border-radius:12px;background:#111119;min-width:0}.row b,.row small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.row b{font-size:11px}.row small{margin-top:3px;color:#918da1;font-size:9px}.row a{align-self:center;color:#cbbdff;font-size:10px;text-decoration:none}.empty{padding:15px;text-align:center;color:#8f8b9e;font-size:11px}small.note{display:block;color:#8e8ba1;line-height:1.5;font-size:10px}.pill{display:inline-block;padding:3px 6px;border-radius:999px;background:#29233e;color:#cfc2ff;font-size:9px;font-weight:800}@media(max-width:560px){.actions{grid-template-columns:1fr}.steps{grid-template-columns:1fr}.card{padding:14px;border-radius:18px}.brand h1{font-size:18px}}@media(min-width:560px) and (max-width:1150px) and (orientation:portrait){.shell{width:min(760px,100%)}.card{padding:18px}.actions{grid-template-columns:repeat(2,minmax(0,1fr))}}
   </style>
 </head>
 <body>
-  <main class="card">
-    <div class="brand"><img src="icon.svg" alt=""><div><h1>Inspiration Board Inbox</h1><p>Android share target for SillyTavern</p></div></div>
-    <div class="status" id="status">Share one or more images from Pinterest, your gallery, or a browser and choose <b>Inspiration Board Inbox</b>. They will wait here until you import them inside SillyTavern.</div>
-    <div class="actions"><button id="install" hidden>Install Share Target</button><button class="secondary" id="refresh">Check Inbox</button><a class="button" href="/" target="_self">Open SillyTavern</a></div>
-    <small>This companion never uploads images to a third party. It saves them to your own SillyTavern server under your current user account. Import them from Inspiration Board → Sync & Share → Android Share Inbox.</small>
+  <main class="shell">
+    <section class="card">
+      <div class="brand"><img src="icon.svg" alt=""><div><h1>Inspiration Board Capture</h1><p>Share Pinterest, Cosmos, Gallery, or web inspiration to your own SillyTavern server.</p></div></div>
+      <div class="status" id="status">Install this companion once, then choose <b>Inspiration Board Inbox</b> from Android's Share menu.</div>
+      <div class="actions" style="margin-top:12px"><button id="install" hidden>Install Share Target</button><button class="secondary" id="refresh">Refresh Captures</button><a class="button" href="/" target="_self">Open SillyTavern</a><a class="button secondary" id="source" href="#" hidden>Back to Shared Source</a></div>
+    </section>
+
+    <section class="card">
+      <div class="steps"><div class="step"><b>1</b><span>Browse normally in the real Pinterest/Cosmos app, Chrome, or Gallery.</span></div><div class="step"><b>2</b><span>Tap <strong>Share</strong> and choose <strong>Inspiration Board Inbox</strong>. Images and URL-only shares are accepted.</span></div><div class="step"><b>3</b><span>Open Inspiration Board → <strong>Capture</strong>. Quick-save or route captures to Face, Outfit, Style, Mood, Generation Studio, and more.</span></div></div>
+    </section>
+
+    <section class="card">
+      <div class="head"><h2>Pending captures <span class="pill" id="count">0</span></h2><button class="secondary" id="refresh2">Refresh</button></div>
+      <div class="list" id="list"><div class="empty">Checking your Capture Inbox…</div></div>
+    </section>
+
+    <section class="card"><small class="note">This companion does not send your captures to Pinterest, Cosmos, OpenAI, or another third party. Shared files are stored under the current SillyTavern user's data directory until you import or delete them. v0.4.1 uses the existing v0.4 server bridge.</small></section>
   </main>
   <script>
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js');
     const status = document.getElementById('status');
+    const list = document.getElementById('list');
+    const count = document.getElementById('count');
+    const source = document.getElementById('source');
     const params = new URLSearchParams(location.search);
-    if (params.get('received')) { status.classList.add('good'); status.innerHTML = '<b>Images received.</b><br>Open SillyTavern and import them from the Android Share Inbox.'; history.replaceState({},'',location.pathname); }
+    const receivedId = params.get('received') || '';
+    if (receivedId) {
+      status.className = 'status good';
+      status.innerHTML = '<b>Capture received.</b><br>You can keep browsing and share more, or open SillyTavern when you are ready to sort them.';
+      history.replaceState({}, '', location.pathname);
+    }
     let installPrompt = null;
-    addEventListener('beforeinstallprompt', event => { event.preventDefault(); installPrompt = event; document.getElementById('install').hidden = false; });
-    document.getElementById('install').onclick = async () => { if (installPrompt) { await installPrompt.prompt(); installPrompt = null; document.getElementById('install').hidden = true; } };
-    document.getElementById('refresh').onclick = async () => { try { const response = await fetch('../shares'); const shares = await response.json(); status.className = 'status good'; status.innerHTML = `<b>${shares.length} pending share bundle${shares.length === 1 ? '' : 's'}.</b><br>Import them from the Inspiration Board extension.`; } catch { status.className = 'status'; status.textContent = 'Could not check the inbox. Make sure you are signed into this SillyTavern server.'; } };
+    addEventListener('beforeinstallprompt', event => {
+      event.preventDefault();
+      installPrompt = event;
+      document.getElementById('install').hidden = false;
+    });
+    document.getElementById('install').onclick = async () => {
+      if (!installPrompt) return;
+      await installPrompt.prompt();
+      installPrompt = null;
+      document.getElementById('install').hidden = true;
+    };
+    function hostLabel(value='') {
+      try { return new URL(value).hostname.replace(/^www\./, ''); } catch { return ''; }
+    }
+    async function refresh() {
+      try {
+        const response = await fetch('../shares', { cache: 'no-store' });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const shares = await response.json();
+        count.textContent = String(shares.length);
+        list.textContent = '';
+        if (!shares.length) {
+          const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = 'No pending captures. Share something from Pinterest, Cosmos, Chrome, or Gallery.'; list.appendChild(empty);
+        }
+        for (const share of shares.slice(0, 12)) {
+          const row = document.createElement('div'); row.className = 'row';
+          const info = document.createElement('div');
+          const title = document.createElement('b'); title.textContent = share.title || 'Shared inspiration';
+          const meta = document.createElement('small');
+          const host = hostLabel(share.url);
+          meta.textContent = `${share.fileCount || 0} image${share.fileCount === 1 ? '' : 's'}${host ? ` · ${host}` : share.url ? ' · link included' : ''}`;
+          info.append(title, meta); row.appendChild(info);
+          if (share.url) { const link = document.createElement('a'); link.href = share.url; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = 'Source ↗'; row.appendChild(link); }
+          list.appendChild(row);
+        }
+        if (receivedId) {
+          const received = shares.find(item => String(item.id) === receivedId);
+          if (received?.url) { source.href = received.url; source.hidden = false; }
+        }
+      } catch (error) {
+        status.className = 'status warn';
+        status.textContent = 'Could not check the Capture Inbox. Make sure this page belongs to the same SillyTavern server and you are signed in.';
+        list.innerHTML = '<div class="empty">Capture Inbox unavailable.</div>';
+      }
+    }
+    document.getElementById('refresh').onclick = refresh;
+    document.getElementById('refresh2').onclick = refresh;
+    refresh();
   </script>
 </body>
 </html>

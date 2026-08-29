@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.4.1
+
+- Pivoted Pinterest/Cosmos integration to a capture-first workflow instead of relying on fragile embedded browsers.
+- Added a new Capture Center with large touch-first launch cards for Pinterest, Cosmos, and the web; the normal app/site is used for browsing and Android Share brings references back into Inspiration Board.
+- Added a live pending-capture badge to the board rail and top bar with configurable polling.
+- Added a two-column unfolded Z Fold portrait Capture Center with sticky bulk controls, large preview cards, bottom-sheet routing, safe-area padding, and thumb-friendly actions.
+- Added URL-only capture resolving: shared Pinterest/Cosmos/web links are scanned through the existing server bridge and the best image candidate is ranked automatically.
+- Added lazy capture previews, source/provider labels, search, provider filters, multi-select, select-all, refresh, delete, retry/source actions, and recent import history.
+- Added batch routing to any board and destination: Inbox, Board, Main Portrait, Face, Hair, Body/Pose, Outfit, Art Style, Mood, Environment, or Generation Studio.
+- Added per-provider quick-save defaults so Pinterest, Cosmos, and general web captures can each remember a preferred destination.
+- Added optional clipboard-link detection when Capture Center opens plus a paste/import field for Pins, Cosmos elements, webpages, and direct image URLs.
+- Added exact duplicate reuse plus configurable near-duplicate handling: ask, reuse existing, or keep the new copy.
+- Added richer source metadata, provider collections/tags, capture timestamps, failure history, and source reopening.
+- Generation-target captures now become configured references and can open Generation Studio with the imported images selected.
+- Kept the v0.4 page scanner as a compatibility fallback, but removed it from the primary workflow.
+- Reused the existing v0.4 server plugin API, so users who already installed the v0.4 plugin do not need a new plugin copy for this update.
+- Corrected the optional server plugin package metadata from 0.3.0 to its actual 0.4.0 runtime version.
+- Added Capture Core tests for settings, provider detection, launch URLs, candidate ranking, clipboard handling, filtering, relative time, and batch summaries.
+
 ## 0.4.0
 
 - Added a touch-first Browse Hub with Pinterest, Cosmos, Web, and Android Captures tabs.
