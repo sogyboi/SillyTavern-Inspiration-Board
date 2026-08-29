@@ -22,14 +22,16 @@ jobs:
         with:
           node-version: "22"
       - name: Apply v0.5.7 patch
-        run: python tools/apply_v057.py
+        run: |
+          python tools/repair_v057_script.py
+          python tools/apply_v057.py
       - name: Verify
         run: |
           npm test
           npm run check
       - name: Commit verified product changes
         run: |
-          git checkout HEAD -- .github/workflows/apply-v057-pricing-status.yml ibv057-pricing-status-trigger.txt tools/apply_v057.py
+          git checkout HEAD -- .github/workflows/apply-v057-pricing-status.yml ibv057-pricing-status-trigger.txt tools/apply_v057.py tools/repair_v057_script.py
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
