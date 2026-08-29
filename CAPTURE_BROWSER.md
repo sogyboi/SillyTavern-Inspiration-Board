@@ -1,4 +1,4 @@
-# Android Capture Browser (v0.5.0)
+# Android Capture Browser (v0.5.2)
 
 Inspiration Board v0.5 adds an optional Android companion browser for the fastest Pinterest/Cosmos capture workflow while keeping the reliable Android Share workflow from v0.4.1.
 
@@ -8,15 +8,15 @@ Pinterest and Cosmos can block iframe embedding, third-party cookies, browser-si
 
 ## Install
 
-1. Update the SillyTavern Inspiration Board extension to v0.5.0 and restart SillyTavern.
+1. Update the SillyTavern Inspiration Board extension to v0.5.2 and restart/reload SillyTavern.
 2. Open **Inspiration Board → Capture**.
 3. Tap **Install / update APK** in the Capture Browser banner.
-4. Install `InspirationBoard-CaptureBrowser-v0.5.0.apk` from the GitHub release.
+4. Install `InspirationBoard-CaptureBrowser-v0.5.2.apk` from the GitHub release.
 5. Return to Capture Center and tap **Capture Browser · Pinterest** or **Capture Browser · Cosmos**.
 
 The extension opens the companion with an `inspirationboard://browse` deep link containing the current SillyTavern origin and current board ID/name. You normally do not have to enter these manually.
 
-The first beta APK is debug-signed. A later switch to stable release signing may require uninstalling/reinstalling the companion once.
+The beta APK is debug-signed. A later switch to stable release signing may require uninstalling/reinstalling the companion once.
 
 ## Floating save workflow
 
@@ -41,7 +41,7 @@ The first beta APK is debug-signed. A later switch to stable release signing may
 
 When the companion was able to upload the actual image bytes, Inspiration Board imports those stored bytes instead of trying to download the remote image again. This helps with temporary/signed CDN image URLs.
 
-## Direct save and fallback
+## Direct save and SillyTavern CSRF
 
 The companion first tries to save directly to:
 
@@ -49,7 +49,19 @@ The companion first tries to save directly to:
 /api/plugins/inspiration-board-sync/share-target
 ```
 
-using the same optional server plugin already used by v0.4/v0.4.1. If the direct request fails because of authentication, provider restrictions, networking, or image download failure, the companion automatically opens Android Share with the capture metadata. Choose **Inspiration Board Inbox** and the normal capture-first workflow continues.
+SillyTavern protects POST endpoints with CSRF validation. Capture Browser v0.5.2 now performs the same handshake that a SillyTavern browser page relies on:
+
+1. GET `/csrf-token` from the configured SillyTavern origin.
+2. Preserve the cookie bound to that token.
+3. POST the capture with the bound cookie and `X-CSRF-Token` header.
+
+This fixes the v0.5.0 native-save failure where the APK posted directly without a CSRF token. That failure also used to show only the endpoint URL because Android attempted to open the failed response as a successful input stream. v0.5.2 reads the correct success/error stream and reports the real HTTP status and response body.
+
+The settings screen includes **Test** for checking both the CSRF handshake and the Inspiration Board Sync `/status` endpoint.
+
+## Android Share fallback
+
+If direct saving still fails because the server plugin is missing, SillyTavern requires a separate login, networking is unavailable, or another server-side restriction rejects the request, the companion automatically opens Android Share with the capture metadata. Choose **Inspiration Board Inbox** and the normal capture-first workflow continues.
 
 The top **App/Site** button opens the current page using Android's normal app/browser handling. This is the fallback when Pinterest/Cosmos refuses to work correctly inside WebView. From there use Android **Share → Inspiration Board Inbox**.
 
@@ -66,4 +78,4 @@ The companion is intended to stay portrait-friendly on an unfolded foldable scre
 
 ## Existing server plugin
 
-v0.5.0 does not require a new server API. If `SillyTavern/plugins/inspiration-board-sync` from v0.4.0 is already installed and running, it remains compatible. The extension update and optional APK are the new pieces.
+v0.5.2 does not require a new server-plugin API. If `SillyTavern/plugins/inspiration-board-sync` from v0.4.0 is already installed and running, it remains compatible. The extension update and v0.5.2 APK are the new pieces.
