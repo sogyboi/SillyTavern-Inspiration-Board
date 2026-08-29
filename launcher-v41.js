@@ -13,7 +13,7 @@ function enhance() {
   const note = document.querySelector('#inspiration_board_settings .ib-v2-settings-note');
   if (note) note.textContent = 'Capture-first visual character workspace: browse Pinterest/Cosmos in their real app or site, share or paste references into Capture Center, then route them directly to boards, reference roles, or Generation Studio.';
   const app = bridge?.app;
-  if (app) installCaptureFirst(app);
+  if (app?.root?.isConnected) installCaptureFirst(app);
 }
 
 function boot() {
