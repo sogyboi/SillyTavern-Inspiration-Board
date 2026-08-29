@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.0
+
+- Added an optional native Android **Capture Browser** companion for Pinterest, Cosmos, and general web inspiration.
+- Added `inspirationboard://browse` deep-link launching from Capture Center, carrying the current SillyTavern server origin and current character board automatically.
+- Added a draggable floating **+** save button over the companion WebView. It scores visible images and chooses the strongest visible reference; long-pressing an image explicitly targets that image.
+- Added destination selection directly in the companion: Inbox, Board, Main Portrait, Face, Hair, Body/Pose, Outfit, Art Style, Mood, Environment, or Generation Studio.
+- Added direct capture upload to the existing `inspiration-board-sync` share-target API with board, destination, provider, page URL, and image URL metadata.
+- Added stored-file import for companion captures so images successfully uploaded to SillyTavern are reused instead of being re-downloaded from temporary/signed CDN URLs.
+- Added Capture Center destination/board chips for companion captures and a one-tap **Save · destination** action that respects the destination selected in the Android browser.
+- Added a top **App/Site** button and automatic Android Share fallback when Pinterest/Cosmos blocks WebView, direct server saving fails, or the chosen image cannot be downloaded.
+- Preserved the v0.4.1 real-app workflow: normal Pinterest/Cosmos/Chrome → Android Share → Inspiration Board Inbox remains fully supported.
+- Added WebView cookie/DOM-storage support, back/forward navigation, URL navigation, provider deep links, and browser settings/status checking.
+- Added a dedicated GitHub Actions Android build that compiles the companion APK and publishes `InspirationBoard-CaptureBrowser-v0.5.0.apk` to the `capture-browser-v0.5.0` GitHub release after merge to main.
+- Added `CAPTURE_BROWSER.md` with install, floating-save, fallback, WebView limitation, and Z Fold usage documentation.
+- Added Capture Browser bridge tests covering server URLs, deep links, capture metadata markers, target labels, and normal-share compatibility.
+
 ## 0.4.1
 
 - Pivoted Pinterest/Cosmos integration to a capture-first workflow instead of relying on fragile embedded browsers.

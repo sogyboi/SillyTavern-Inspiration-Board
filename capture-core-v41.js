@@ -53,11 +53,29 @@ export function providerLaunchUrl(providerId, query = '') {
   return provider.homeUrl || provider.exploreUrl;
 }
 
+function captureMarker(share = {}) {
+  const match = String(share.text || '').match(/\[IBCAPTURE_V1\s+([^\]]+)\]/i);
+  if (!match) return null;
+  try {
+    const params = new URLSearchParams(match[1]);
+    return {
+      provider: params.get('provider') || '',
+      page: normalizeRemoteUrl(params.get('page') || ''),
+      image: normalizeRemoteUrl(params.get('image') || ''),
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function extractCaptureUrl(share = {}) {
-  return extractFirstUrl(share.url, share.text, share.title);
+  const marker = captureMarker(share);
+  return marker?.page || extractFirstUrl(share.url, share.text, share.title) || marker?.image || '';
 }
 
 export function captureProvider(share = {}) {
+  const marker = captureMarker(share);
+  if (CAPTURE_PROVIDER_ORDER.includes(marker?.provider)) return marker.provider;
   return detectBrowseProvider(extractCaptureUrl(share));
 }
 
