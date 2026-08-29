@@ -4,6 +4,8 @@
 
     <application
         android:allowBackup="false"
+        android:icon="@drawable/ic_capture"
+        android:roundIcon="@drawable/ic_capture"
         android:label="Inspiration Board Capture"
         android:theme="@style/AppTheme"
         android:usesCleartextTraffic="true">
