@@ -80,28 +80,38 @@ function patchImportedSource(app, marker) {
   if (!marker?.page || !marker?.image) return;
   const board = app.state?.boards?.find(entry => entry.id === marker.boardId) || activeBoard(app);
   if (!board) return;
-  const candidates = (board.items || []).filter(item => item.type === 'image' && item.sourceUrl === marker.image);
-  for (const item of candidates) {
+  const sourceImageLine = `Original image: ${marker.image}`;
+  for (const item of board.items || []) {
+    if (item.type !== 'image' || item.sourceUrl !== marker.image) continue;
     item.sourceUrl = marker.page;
-    const sourceImageLine = `Original image: ${marker.image}`;
     if (!String(item.notes || '').includes(sourceImageLine)) item.notes = [item.notes || '', sourceImageLine].filter(Boolean).join('\n\n');
     item.updatedAt = Date.now();
+  }
+  for (const entry of board.inbox || []) {
+    if (entry.sourceUrl !== marker.image) continue;
+    entry.sourceUrl = marker.page;
+    if (!String(entry.notes || '').includes(sourceImageLine)) entry.notes = [entry.notes || '', sourceImageLine].filter(Boolean).join('\n\n');
   }
   app.scheduleSave?.();
 }
 
 async function importMarkedCapture(app, card, detail, markerInfo) {
   const bridge = globalThis.InspirationBoardCapture;
-  if (!bridge?.importUrl) throw new Error('Capture Center is not ready yet. Close and reopen Inspiration Board.');
+  if (!bridge?.importPending && !bridge?.importUrl) throw new Error('Capture Center is not ready yet. Close and reopen Inspiration Board.');
   const board = app.state?.boards?.find(entry => entry.id === markerInfo.marker.boardId) || activeBoard(app);
   const boardId = board?.id || activeBoard(app)?.id;
   if (!boardId) throw new Error('No board is available for this capture.');
   const target = markerInfo.marker.target || 'inbox';
   const progress = app.showProgressModal?.('Capture Browser save', `Saving as ${targetLabel(target)}…`);
   try {
-    await bridge.importUrl(markerInfo.url, target, boardId);
+    if (bridge.importPending) {
+      await bridge.importPending(detail.id, target, boardId, { deleteAfter: true });
+      detailCache.delete(detail.id);
+    } else {
+      await bridge.importUrl(markerInfo.url, target, boardId);
+      await removeCapture(detail.id);
+    }
     patchImportedSource(app, markerInfo.marker);
-    await removeCapture(detail.id);
     await bridge.refresh?.();
     toast(app, `Saved Capture Browser item as ${targetLabel(target)}${board?.name ? ` → ${board.name}` : ''}.`, 'success');
   } finally {
