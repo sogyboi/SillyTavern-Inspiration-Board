@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.5
+
+- Fixed the v0.5.4 native JSON save route throwing SillyTavern's generic HTML HTTP 500 before the plugin handler could run.
+- Removed the redundant route-level `express.json()` middleware from `/capture-native`; SillyTavern already parses JSON globally before server plugins are mounted.
+- Added a regression test preventing the native capture route from double-parsing SillyTavern request streams again.
+- Android Capture Browser v0.5.4 remains compatible; no APK reinstall is required for this server-side hotfix.
+- The installed `inspiration-board-sync` server plugin must be replaced with v0.5.5 and SillyTavern restarted.
+
 ## 0.5.4
 
 - Replaced the Android Capture Browser native direct-save multipart request with a dedicated JSON capture path.
