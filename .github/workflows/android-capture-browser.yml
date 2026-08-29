@@ -31,22 +31,22 @@ jobs:
       - name: Build APK
         run: |
           gradle -p android-companion :app:assembleDebug
-          cp android-companion/app/build/outputs/apk/debug/app-debug.apk InspirationBoard-CaptureBrowser-v0.5.4.apk
+          cp android-companion/app/build/outputs/apk/debug/app-debug.apk InspirationBoard-CaptureBrowser-v0.5.6.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: InspirationBoard-CaptureBrowser-v0.5.4
-          path: InspirationBoard-CaptureBrowser-v0.5.4.apk
+          name: InspirationBoard-CaptureBrowser-v0.5.6
+          path: InspirationBoard-CaptureBrowser-v0.5.6.apk
       - name: Publish APK release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="capture-browser-v0.5.4"
-          APK="InspirationBoard-CaptureBrowser-v0.5.4.apk"
+          TAG="capture-browser-v0.5.6"
+          APK="InspirationBoard-CaptureBrowser-v0.5.6.apk"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "$APK" --clobber
           else
             gh release create "$TAG" "$APK" \
-              --title "Inspiration Board Capture Browser v0.5.4" \
-              --notes "Moves native direct saving off fragile multipart parsing and onto a CSRF-protected JSON capture endpoint in Inspiration Board Sync. The APK sends optional base64 image bytes plus source metadata, retains UI-thread-safe cookie handling, and keeps Android Share as fallback. Requires the v0.5.4 server plugin copy in Termux. This beta APK uses Android debug signing."
+              --title "Inspiration Board Capture Browser v0.5.6" \
+              --notes "Uses a private raw native-capture transport so SillyTavern does not pre-parse the save body. Settings → Test now performs the same CSRF-protected POST used by the floating save button and only reports success when that path works. Also de-duplicates session cookies before POSTs. Requires Inspiration Board Sync v0.5.6 in SillyTavern/plugins. Android Share remains available as fallback. This beta APK uses Android debug signing."
           fi
