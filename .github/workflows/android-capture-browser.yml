@@ -31,22 +31,22 @@ jobs:
       - name: Build APK
         run: |
           gradle -p android-companion :app:assembleDebug
-          cp android-companion/app/build/outputs/apk/debug/app-debug.apk InspirationBoard-CaptureBrowser-v0.5.3.apk
+          cp android-companion/app/build/outputs/apk/debug/app-debug.apk InspirationBoard-CaptureBrowser-v0.5.4.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: InspirationBoard-CaptureBrowser-v0.5.3
-          path: InspirationBoard-CaptureBrowser-v0.5.3.apk
+          name: InspirationBoard-CaptureBrowser-v0.5.4
+          path: InspirationBoard-CaptureBrowser-v0.5.4.apk
       - name: Publish APK release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="capture-browser-v0.5.3"
-          APK="InspirationBoard-CaptureBrowser-v0.5.3.apk"
+          TAG="capture-browser-v0.5.4"
+          APK="InspirationBoard-CaptureBrowser-v0.5.4.apk"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "$APK" --clobber
           else
             gh release create "$TAG" "$APK" \
-              --title "Inspiration Board Capture Browser v0.5.3" \
-              --notes "Fixes native direct saves failing when WebView or CookieManager APIs were touched from a background thread. The browser user agent is now captured on the Android UI thread and all cookie access is marshalled safely to that thread while preserving the v0.5.2 CSRF/session handshake, direct image upload, HTTP diagnostics, and Android Share fallback. This beta APK uses Android debug signing."
+              --title "Inspiration Board Capture Browser v0.5.4" \
+              --notes "Moves native direct saving off fragile multipart parsing and onto a CSRF-protected JSON capture endpoint in Inspiration Board Sync. The APK sends optional base64 image bytes plus source metadata, retains UI-thread-safe cookie handling, and keeps Android Share as fallback. Requires the v0.5.4 server plugin copy in Termux. This beta APK uses Android debug signing."
           fi
