@@ -22,13 +22,16 @@ export function normalizeServerBase(value) {
 }
 
 export function companionBrowseUrl({ provider = 'pinterest', server = '', boardId = '', boardName = '', url = '' } = {}) {
+  const providerId = PROVIDER_URLS[provider] ? provider : 'web';
   const params = new URLSearchParams();
-  params.set('provider', PROVIDER_URLS[provider] ? provider : 'web');
+  params.set('provider', providerId);
   const normalizedServer = normalizeServerBase(server);
   if (normalizedServer) params.set('server', normalizedServer);
   if (boardId) params.set('boardId', String(boardId));
   if (boardName) params.set('boardName', String(boardName));
-  if (url) params.set('url', String(url));
+  // Always include an explicit URL when launched by Inspiration Board so a cold-start
+  // honors the provider card that was tapped instead of restoring another provider's last page.
+  params.set('url', String(url || PROVIDER_URLS[providerId]));
   return `inspirationboard://browse?${params.toString()}`;
 }
 
