@@ -1,1 +1,1 @@
-apply v0.5.5 server JSON parser hotfix
+apply v0.5.5 server JSON parser hotfix retry 2
