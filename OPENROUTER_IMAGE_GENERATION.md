@@ -39,3 +39,9 @@ Generated board items are tagged `generated` and `openrouter` and keep the promp
 ## Billing
 
 OpenRouter image generation uses your OpenRouter credit balance. The panel shows the remaining balance when SillyTavern can retrieve it. OpenRouter currently does not offer free image-generation models.
+
+## v0.5.7 pricing and send status
+
+Generation Studio now enriches the SillyTavern image-model list with OpenRouter's dedicated Image API catalog and per-provider endpoint pricing. Price labels are unit-aware: a true flat output-image price is shown per image, variable flat tiers use a `from` label, megapixel-priced models are shown per MP, and token-priced models are explicitly marked `token-priced`. If pricing metadata cannot be loaded, the Studio keeps working and shows the price as unavailable instead of guessing.
+
+A live status chip stays visible while a generation is queued or running. The client distinguishes between preparing the request, initiating the SillyTavern request, dispatching it, receiving the HTTP response, receiving image data, saving the result, and final success/failure. `Request dispatched` means the browser has handed the request to the SillyTavern generation endpoint; `OpenRouter responded` only appears after an HTTP response returns.

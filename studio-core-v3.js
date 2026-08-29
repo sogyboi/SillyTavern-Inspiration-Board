@@ -1,4 +1,4 @@
-export const STUDIO_VERSION = '0.3.0';
+export const STUDIO_VERSION = '0.5.7';
 
 export const REFERENCE_PURPOSES = Object.freeze([
   'identity',
@@ -447,17 +447,15 @@ export function parsePriceNumber(value) {
 }
 
 export function getModelImagePrice(metadata = {}) {
-  const pricing = metadata?.pricing || metadata?.cost || {};
-  const candidates = [
-    pricing.image,
-    pricing.images,
-    pricing.request,
-    pricing.output_image,
-    pricing.image_output,
-    metadata?.image_price,
-    metadata?.price_per_image,
-  ];
-  for (const value of candidates) {
+  // Only treat a value as a literal per-generated-image price when we can prove its unit.
+  // OpenRouter's general model catalog also exposes image/token rates that are NOT the
+  // final price of one generated image, so those intentionally stay out of this helper.
+  const summary = metadata?.priceSummary;
+  if (summary?.exactFlat === true) {
+    const exact = parsePriceNumber(summary.flatPerImage);
+    if (exact !== null) return exact;
+  }
+  for (const value of [metadata?.image_price, metadata?.price_per_image]) {
     const parsed = parsePriceNumber(value);
     if (parsed !== null) return parsed;
   }
@@ -688,6 +686,11 @@ export function makeQueueJob(input = {}) {
     resultImageIds: [],
     error: null,
     fallbackLog: [],
+    progress: String(input.progress || ''),
+    progressPhase: input.progressPhase || 'queued',
+    dispatchedAt: input.dispatchedAt || null,
+    responseAt: input.responseAt || null,
+    lastHttpStatus: input.lastHttpStatus ?? null,
     metadata: input.metadata && typeof input.metadata === 'object' ? clone(input.metadata) : {},
   };
 }

@@ -11,9 +11,14 @@ import {
 } from './studio-core-v3.js';
 
 const PUBLIC_MODELS_URL = 'https://openrouter.ai/api/v1/models?output_modalities=image';
+const IMAGE_MODELS_URL = 'https://openrouter.ai/api/v1/images/models';
 const MODEL_CACHE_MS = 10 * 60_000;
+const PRICE_CACHE_MS = 15 * 60_000;
 let modelCache = null;
 let modelCacheAt = 0;
+let dedicatedCatalogCache = null;
+let dedicatedCatalogAt = 0;
+const endpointPricingCache = new Map();
 
 function requestHeaders({ contentType = true } = {}) {
   const context = globalThis.SillyTavern?.getContext?.();
@@ -53,6 +58,193 @@ async function fetchPublicModelMetadata() {
   }
 }
 
+async function fetchDedicatedImageCatalog({ force = false } = {}) {
+  if (!force && dedicatedCatalogCache && Date.now() - dedicatedCatalogAt < MODEL_CACHE_MS) return dedicatedCatalogCache;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 7000);
+  try {
+    const response = await fetch(IMAGE_MODELS_URL, {
+      headers: { Accept: 'application/json' },
+      signal: controller.signal,
+      cache: 'no-store',
+    });
+    if (!response.ok) return [];
+    const data = await response.json();
+    const rows = Array.isArray(data?.data) ? data.data.map(normalizeModelEntry) : [];
+    dedicatedCatalogCache = rows;
+    dedicatedCatalogAt = Date.now();
+    return rows;
+  } catch (error) {
+    console.info('[Inspiration Board] OpenRouter dedicated image catalog unavailable; pricing will fall back gracefully.', error);
+    return dedicatedCatalogCache || [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function endpointRows(payload) {
+  if (Array.isArray(payload?.data?.endpoints)) return payload.data.endpoints;
+  if (Array.isArray(payload?.endpoints)) return payload.endpoints;
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (payload?.data && typeof payload.data === 'object') return [payload.data];
+  if (payload && typeof payload === 'object' && Array.isArray(payload.pricing)) return [payload];
+  return [];
+}
+
+function money(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return null;
+  if (number < 0.01) return `$${number.toFixed(4)}`;
+  return `$${number.toFixed(2)}`;
+}
+
+export function summarizeOpenRouterImagePricing(payload = {}) {
+  const endpoints = endpointRows(payload);
+  const lines = endpoints.flatMap(endpoint => Array.isArray(endpoint?.pricing) ? endpoint.pricing : []);
+  const normalized = lines.map(line => ({
+    billable: String(line?.billable || '').toLowerCase(),
+    unit: String(line?.unit || '').toLowerCase(),
+    cost: Number(line?.cost_usd),
+    variant: line?.variant || line?.conditions || line?.tier || null,
+  })).filter(line => Number.isFinite(line.cost) && line.cost >= 0);
+
+  const isOutputImage = line => line.billable === 'output_image' || (line.billable.includes('output') && line.billable.includes('image'));
+  const output = normalized.filter(isOutputImage);
+  const request = normalized.filter(line => line.billable === 'request' && ['request', 'call'].includes(line.unit));
+  const inputImages = normalized.filter(line => (line.billable === 'input_image' || (line.billable.includes('input') && line.billable.includes('image'))) && line.unit === 'image');
+  const requestMin = request.length ? Math.min(...request.map(line => line.cost)) : 0;
+  const requestMax = request.length ? Math.max(...request.map(line => line.cost)) : 0;
+  const inputReferencePrice = inputImages.length ? Math.min(...inputImages.map(line => line.cost)) : null;
+  const details = [];
+
+  const flat = output.filter(line => line.unit === 'image');
+  const megapixel = output.filter(line => ['megapixel', 'mp'].includes(line.unit));
+  const token = output.filter(line => line.unit.includes('token'));
+  const other = output.filter(line => !['image', 'megapixel', 'mp'].includes(line.unit) && !line.unit.includes('token'));
+
+  if (flat.length) {
+    const outputMin = Math.min(...flat.map(line => line.cost));
+    const outputMax = Math.max(...flat.map(line => line.cost));
+    const min = outputMin + requestMin;
+    const max = outputMax + requestMax;
+    const variable = Math.abs(max - min) > 1e-12 || megapixel.length > 0 || token.length > 0 || other.length > 0;
+    const formattedMin = money(min);
+    const formattedMax = money(max);
+    if (variable && formattedMax && formattedMax !== formattedMin) details.push(`${formattedMin}–${formattedMax} per output image depending on provider, quality, or resolution.`);
+    else details.push(`${formattedMin} per output image${requestMin ? ' including the minimum request fee' : ''}.`);
+    if (megapixel.length) details.push(`Other endpoints bill by megapixel.`);
+    if (token.length) details.push(`Other endpoints bill image output by token.`);
+    if (inputReferencePrice !== null) details.push(`Reference-image input can add from ${money(inputReferencePrice)} per input image.`);
+    return {
+      kind: variable ? 'mixed' : 'image',
+      unit: 'image',
+      label: variable ? `from ${formattedMin}/img` : `${formattedMin}/img`,
+      detail: details.join(' '),
+      exactFlat: !variable,
+      flatPerImage: !variable ? min : null,
+      minimumPerImage: min,
+      maximumPerImage: max,
+      inputReferencePrice,
+      variable,
+      endpointCount: endpoints.length,
+    };
+  }
+
+  if (megapixel.length) {
+    const min = Math.min(...megapixel.map(line => line.cost));
+    const max = Math.max(...megapixel.map(line => line.cost));
+    details.push(`${money(min)}${max !== min ? `–${money(max)}` : ''} per megapixel; final cost depends on rendered resolution.`);
+    if (inputReferencePrice !== null) details.push(`Reference-image input can add from ${money(inputReferencePrice)} per input image.`);
+    return {
+      kind: 'megapixel', unit: 'megapixel', label: `from ${money(min)}/MP`, detail: details.join(' '),
+      exactFlat: false, flatPerImage: null, minimumPerImage: null, maximumPerImage: null,
+      inputReferencePrice, variable: true, endpointCount: endpoints.length,
+    };
+  }
+
+  if (token.length) {
+    const min = Math.min(...token.map(line => line.cost));
+    details.push(`Image output is token-priced (from ${money(min)} per image-output token); the final picture cost varies with the model and output.`);
+    if (inputReferencePrice !== null) details.push(`Reference-image input can add from ${money(inputReferencePrice)} per input image.`);
+    return {
+      kind: 'token', unit: 'token', label: 'token-priced', detail: details.join(' '),
+      exactFlat: false, flatPerImage: null, minimumPerImage: null, maximumPerImage: null,
+      inputReferencePrice, variable: true, endpointCount: endpoints.length,
+    };
+  }
+
+  if (output.length || request.length) {
+    const units = [...new Set([...output, ...request].map(line => line.unit).filter(Boolean))];
+    return {
+      kind: 'variable', unit: units.join(',') || 'variable', label: 'price varies',
+      detail: `OpenRouter reports variable image pricing${units.length ? ` (${units.join(', ')})` : ''}.`,
+      exactFlat: false, flatPerImage: null, minimumPerImage: null, maximumPerImage: null,
+      inputReferencePrice, variable: true, endpointCount: endpoints.length,
+    };
+  }
+
+  return null;
+}
+
+export function formatOpenRouterImagePrice(summary) {
+  return summary?.label || 'price unavailable';
+}
+
+async function fetchEndpointPricing(model) {
+  const id = String(model?.id || '');
+  if (!id) return null;
+  const cached = endpointPricingCache.get(id);
+  if (cached && Date.now() - cached.at < PRICE_CACHE_MS) return cached.summary;
+  const endpointPath = model?.dedicatedImage?.endpoints || model?.endpoints;
+  if (!endpointPath) return null;
+  const url = new URL(endpointPath, 'https://openrouter.ai').href;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 6500);
+  try {
+    const response = await fetch(url, { headers: { Accept: 'application/json' }, signal: controller.signal, cache: 'no-store' });
+    if (!response.ok) return null;
+    const summary = summarizeOpenRouterImagePricing(await response.json());
+    endpointPricingCache.set(id, { at: Date.now(), summary });
+    return summary;
+  } catch (error) {
+    console.info(`[Inspiration Board] Could not load exact OpenRouter image pricing for ${id}.`, error);
+    return cached?.summary || null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function enrichOpenRouterImagePricing(models = [], {
+  selectedId = '',
+  concurrency = 5,
+  onUpdate = () => {},
+} = {}) {
+  const eligible = models.filter(model => model?.dedicatedImage?.endpoints);
+  const ordered = [
+    ...eligible.filter(model => model.id === selectedId),
+    ...eligible.filter(model => model.id !== selectedId),
+  ];
+  let cursor = 0;
+  let loaded = 0;
+  const total = ordered.length;
+  const workers = Array.from({ length: Math.min(Math.max(1, concurrency), Math.max(1, total)) }, async () => {
+    while (cursor < ordered.length) {
+      const index = cursor++;
+      const model = ordered[index];
+      model.pricingStatus = 'loading';
+      onUpdate(model, { loaded, total });
+      const summary = await fetchEndpointPricing(model);
+      model.priceSummary = summary;
+      model.imagePrice = summary?.exactFlat ? summary.flatPerImage : null;
+      model.pricingStatus = summary ? 'ready' : 'unavailable';
+      loaded += 1;
+      onUpdate(model, { loaded, total });
+    }
+  });
+  await Promise.all(workers);
+  return models;
+}
+
 async function fetchSillyTavernModels() {
   const response = await fetch('/api/openrouter/models/image', {
     method: 'POST',
@@ -66,25 +258,29 @@ async function fetchSillyTavernModels() {
 
 export async function loadOpenRouterModels({ force = false } = {}) {
   if (!force && modelCache && Date.now() - modelCacheAt < MODEL_CACHE_MS) return modelCache;
-  const [basic, detailed] = await Promise.all([
+  const [basic, detailed, dedicated] = await Promise.all([
     fetchSillyTavernModels(),
     fetchPublicModelMetadata(),
+    fetchDedicatedImageCatalog({ force }),
   ]);
   const detailMap = new Map(detailed.map(model => [model.id, model]));
+  const dedicatedMap = new Map(dedicated.map(model => [model.id, model]));
+  const decorate = model => {
+    const dedicatedImage = dedicatedMap.get(model.id) || null;
+    model.dedicatedImage = dedicatedImage;
+    model.capabilities = inferModelCapabilities(model.id, dedicatedImage || detailMap.get(model.id) || model);
+    const cached = endpointPricingCache.get(model.id);
+    model.priceSummary = cached && Date.now() - cached.at < PRICE_CACHE_MS ? cached.summary : null;
+    model.imagePrice = getModelImagePrice(model);
+    model.pricingStatus = model.priceSummary ? 'ready' : (dedicatedImage?.endpoints ? 'idle' : 'unavailable');
+    return model;
+  };
   const merged = basic.map(model => {
     const metadata = detailMap.get(model.id);
-    const mergedModel = normalizeModelEntry({ ...metadata, ...model, id: model.id });
-    mergedModel.capabilities = inferModelCapabilities(model.id, metadata || model);
-    mergedModel.imagePrice = getModelImagePrice(metadata || model);
-    return mergedModel;
+    return decorate(normalizeModelEntry({ ...metadata, ...model, id: model.id }));
   });
   for (const model of detailed) {
-    if (!merged.some(existing => existing.id === model.id)) {
-      const normalized = normalizeModelEntry(model);
-      normalized.capabilities = inferModelCapabilities(normalized.id, model);
-      normalized.imagePrice = getModelImagePrice(model);
-      merged.push(normalized);
-    }
+    if (!merged.some(existing => existing.id === model.id)) merged.push(decorate(normalizeModelEntry(model)));
   }
   merged.sort((a, b) => a.name.localeCompare(b.name));
   modelCache = merged;
@@ -238,8 +434,9 @@ async function parseErrorResponse(response) {
   return String(detail || '').slice(0, 500);
 }
 
-async function requestImage({ model, prompt, references, aspectRatio, signal }) {
-  const response = await fetch('/api/openrouter/image/generate', {
+async function requestImage({ model, prompt, references, aspectRatio, signal, onTransport = () => {} }) {
+  onTransport({ phase: 'sending', message: 'Sending request to SillyTavern…' });
+  const requestPromise = fetch('/api/openrouter/image/generate', {
     method: 'POST',
     headers: requestHeaders(),
     signal,
@@ -249,6 +446,11 @@ async function requestImage({ model, prompt, references, aspectRatio, signal }) 
       aspect_ratio: aspectRatio || '1:1',
     }),
   });
+  const dispatchedAt = Date.now();
+  onTransport({ phase: 'dispatched', dispatchedAt, message: 'Request dispatched ✓ · waiting for OpenRouter…' });
+  const response = await requestPromise;
+  const responseAt = Date.now();
+  onTransport({ phase: 'response', responseAt, httpStatus: response.status, message: `OpenRouter response received · HTTP ${response.status}` });
   if (!response.ok) {
     const detail = await parseErrorResponse(response);
     const error = new Error(`OpenRouter generation failed (HTTP ${response.status})${detail ? `: ${detail}` : ''}`);
@@ -260,6 +462,7 @@ async function requestImage({ model, prompt, references, aspectRatio, signal }) 
   if (!data?.image) throw new Error('OpenRouter returned no image data.');
   const format = String(data.format || 'png').toLowerCase();
   const mime = format === 'jpg' || format === 'jpeg' ? 'image/jpeg' : format === 'webp' ? 'image/webp' : 'image/png';
+  onTransport({ phase: 'received', httpStatus: response.status, message: 'Image received ✓ · preparing save…' });
   return { ...data, format, mime, dataUrl: `data:${mime};base64,${data.image}` };
 }
 
@@ -283,6 +486,7 @@ export async function requestImageWithFallback({
   retryWithoutReferences = true,
   retrySquare = true,
   onAttempt = () => {},
+  onTransport = () => {},
 }) {
   const attempts = [];
   const addAttempt = (refs, ratio, reason) => {
@@ -306,7 +510,7 @@ export async function requestImageWithFallback({
     if (signal?.aborted) throw new DOMException('Generation cancelled.', 'AbortError');
     onAttempt({ index, total: attempts.length, references: attempt.refs.length, aspectRatio: attempt.ratio, reason: attempt.reason });
     try {
-      const result = await requestImage({ model, prompt, references: attempt.refs, aspectRatio: attempt.ratio, signal });
+      const result = await requestImage({ model, prompt, references: attempt.refs, aspectRatio: attempt.ratio, signal, onTransport });
       if (index > 0) log.push(`Succeeded after fallback: ${attempt.reason}.`);
       return { result, referencesUsed: attempt.refs, aspectRatioUsed: attempt.ratio, fallbackLog: log };
     } catch (error) {
@@ -387,7 +591,9 @@ export async function executeGenerationJob(app, job, {
   const board = app.state.boards.find(candidate => candidate.id === job.boardId) || app.activeBoard();
   const studio = ensureStudio(board);
   const capabilities = inferModelCapabilities(job.model, modelMetadata || job.modelMetadata);
+  onProgress({ phase: 'preparing', message: 'Preparing references and request…' });
   const references = await prepareReferences(app, job.references || [], capabilities);
+  onProgress({ phase: 'ready', message: `${references.length ? `${references.length} reference(s) prepared · ` : ''}ready to send` });
   const outputs = [];
   const total = Math.max(1, Number(job.count) || 1);
   let fallbackLog = [];
@@ -398,7 +604,7 @@ export async function executeGenerationJob(app, job, {
 
   for (let index = 0; index < total; index++) {
     if (signal?.aborted) throw new DOMException('Generation cancelled.', 'AbortError');
-    onProgress({ phase: 'request', index, total, message: `Generating ${index + 1} of ${total}…` });
+    onProgress({ phase: 'sending', index, total, message: `Sending image ${index + 1} of ${total}…` });
     const response = await requestImageWithFallback({
       model: job.model,
       prompt: job.finalPrompt,
@@ -409,6 +615,7 @@ export async function executeGenerationJob(app, job, {
       retryWithoutReferences: studio.settings.retryWithoutReferences,
       retrySquare: studio.settings.retrySquare,
       onAttempt: attempt => onProgress({ phase: 'attempt', index, total, attempt }),
+      onTransport: transport => onProgress({ ...transport, index, total }),
     });
     fallbackLog = [...new Set([...fallbackLog, ...response.fallbackLog])];
     onProgress({ phase: 'store', index, total, message: `Saving result ${index + 1} of ${total}…` });

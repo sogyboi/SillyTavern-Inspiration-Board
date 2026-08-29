@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.7
+
+- Added a searchable OpenRouter image-model picker with price text directly beside model names.
+- Uses OpenRouter's dedicated image-model and per-endpoint pricing metadata in the background; flat output prices render as `$X/img`, ranges as `from $X/img`, megapixel billing as `$X/MP`, and token-priced image output is labeled instead of being misreported as a tiny per-picture price.
+- Hardened cost estimation so generic OpenRouter image-token/input-image rates are no longer mistaken for one generated picture.
+- Added a persistent live generation chip on the board showing Queued, Preparing, Sending, Request dispatched, OpenRouter response received, Saving, Done, Failed, or Cancelled without requiring the Queue modal to be open.
+- Generate Now immediately changes to `Sending…`, and the extension confirms when the browser has dispatched the request and when a result is saved.
+- Queue jobs now retain dispatch time, response time, HTTP status, progress phase, and readable progress text for easier troubleshooting.
+- Fixed the generated-result `Creator` action to use the existing board-move helper instead of an undefined function.
+- No Android Capture Browser or server-plugin update is required for this release; v0.5.6 of those components remains compatible.
+
 ## 0.5.6
 
 - Reworked native Capture Browser saving to use `application/x-inspiration-board-capture` instead of `application/json`, bypassing SillyTavern's global JSON body parser entirely.
