@@ -41,7 +41,12 @@ jobs:
       - name: Commit verified hotfix
         run: |
           rm -rf android-companion/.gradle android-companion/app/build
-          git checkout HEAD -- .github/workflows/apply-v054-native-json.yml ibv054-native-json-trigger.txt tools/apply_v054_native_json.py tools/repair_v054_patch.py
+          git checkout HEAD -- \
+            .github/workflows/android-capture-browser.yml \
+            .github/workflows/apply-v054-native-json.yml \
+            ibv054-native-json-trigger.txt \
+            tools/apply_v054_native_json.py \
+            tools/repair_v054_patch.py
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
