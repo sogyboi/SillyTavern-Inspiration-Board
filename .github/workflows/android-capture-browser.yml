@@ -2,7 +2,7 @@ name: Android Capture Browser
 
 on:
   push:
-    branches: [main, "feature/**"]
+    branches: [main, "feature/**", "hotfix/**"]
     paths:
       - "android-companion/**"
       - ".github/workflows/android-capture-browser.yml"
@@ -31,22 +31,22 @@ jobs:
       - name: Build APK
         run: |
           gradle -p android-companion :app:assembleDebug
-          cp android-companion/app/build/outputs/apk/debug/app-debug.apk InspirationBoard-CaptureBrowser-v0.5.0.apk
+          cp android-companion/app/build/outputs/apk/debug/app-debug.apk InspirationBoard-CaptureBrowser-v0.5.2.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: InspirationBoard-CaptureBrowser-v0.5.0
-          path: InspirationBoard-CaptureBrowser-v0.5.0.apk
+          name: InspirationBoard-CaptureBrowser-v0.5.2
+          path: InspirationBoard-CaptureBrowser-v0.5.2.apk
       - name: Publish APK release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="capture-browser-v0.5.0"
-          APK="InspirationBoard-CaptureBrowser-v0.5.0.apk"
+          TAG="capture-browser-v0.5.2"
+          APK="InspirationBoard-CaptureBrowser-v0.5.2.apk"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "$APK" --clobber
           else
             gh release create "$TAG" "$APK" \
-              --title "Inspiration Board Capture Browser v0.5.0" \
-              --notes "Android companion browser for Inspiration Board. Browse Pinterest/Cosmos in a WebView with a draggable floating save button. If a provider blocks WebView, use App/Site and Android Share → Inspiration Board Inbox as the fallback. This first beta APK uses Android debug signing; later signing may require reinstalling the companion app."
+              --title "Inspiration Board Capture Browser v0.5.2" \
+              --notes "Fixes direct saving to SillyTavern by performing the required /csrf-token handshake, preserving the bound session cookie, and sending X-CSRF-Token with native capture uploads. Also reports real HTTP errors instead of only the endpoint URL. Pinterest/Cosmos WebView browsing, the floating save button, and App/Site + Android Share fallback remain available. This beta APK uses Android debug signing."
           fi

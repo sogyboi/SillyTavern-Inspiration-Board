@@ -10,7 +10,7 @@
         android:theme="@style/AppTheme"
         android:usesCleartextTraffic="true">
         <activity
-            android:name=".MainActivity"
+            android:name=".CaptureBrowserActivity"
             android:exported="true"
             android:launchMode="singleTask">
             <intent-filter>

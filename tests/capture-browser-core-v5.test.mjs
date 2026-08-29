@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  CAPTURE_BROWSER_RELEASE,
   CAPTURE_BROWSER_VERSION,
   buildCaptureMarker,
   captureImportUrl,
@@ -12,8 +13,9 @@ import {
   targetLabel,
 } from '../capture-browser-core-v5.js';
 
-test('Capture Browser version is v0.5.0', () => {
-  assert.equal(CAPTURE_BROWSER_VERSION, '0.5.0');
+test('Capture Browser version and release point to v0.5.2', () => {
+  assert.equal(CAPTURE_BROWSER_VERSION, '0.5.2');
+  assert.match(CAPTURE_BROWSER_RELEASE, /capture-browser-v0\.5\.2$/);
 });
 
 test('normalizes local SillyTavern server URLs', () => {
@@ -22,7 +24,7 @@ test('normalizes local SillyTavern server URLs', () => {
   assert.equal(normalizeServerBase('javascript:alert(1)'), '');
 });
 
-test('builds companion deep link with active board context', () => {
+test('builds companion deep link with active board context and provider URL', () => {
   const value = companionBrowseUrl({
     provider: 'pinterest',
     server: 'http://127.0.0.1:8000/',
@@ -36,6 +38,7 @@ test('builds companion deep link with active board context', () => {
   assert.equal(url.searchParams.get('server'), 'http://127.0.0.1:8000');
   assert.equal(url.searchParams.get('boardId'), 'board-12');
   assert.equal(url.searchParams.get('boardName'), 'Althea');
+  assert.equal(url.searchParams.get('url'), 'https://www.pinterest.com/');
 });
 
 test('capture marker round trips target and source URLs', () => {
