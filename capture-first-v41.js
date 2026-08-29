@@ -1,10 +1,19 @@
-import { addReference, clamp, getFrameMembers, makeImageItem, makeInboxEntry, staggerPositions } from './core-v2.js';
+import {
+  addReference,
+  clamp,
+  getFrameMembers,
+  makeImageItem,
+  makeInboxEntry,
+  staggerPositions,
+} from './core-v2.js';
 import { createImageRecord, findNearDuplicates, getImageByHash, putImage } from './db-v2.js';
 import { ensureStudio } from './studio-core-v3.js';
 import {
   BROWSE_PROVIDERS,
   BROWSE_TARGETS,
   candidateFilename,
+  detectBrowseProvider,
+  extractFirstUrl,
   mergeCandidates,
   normalizeCandidate,
   sourceNote,
@@ -15,10 +24,10 @@ import {
   CAPTURE_PROVIDER_ORDER,
   CAPTURE_VERSION,
   captureProvider,
+  defaultCaptureSettings,
   extractCaptureUrl,
   filterCaptures,
   makeCaptureHistoryRecord,
-  normalizeCaptureSettings,
   pickBestCandidate,
   providerLaunchUrl,
   providerMeta,
@@ -26,20 +35,14 @@ import {
   relativeCaptureTime,
   selectedCaptureIds,
   shouldOfferClipboard,
-  sortCandidates,
   summarizeBatch,
 } from './capture-core-v41.js';
 
 const INSTALL_KEY = Symbol.for('inspiration-board-capture-first-v41');
 const API_ROOT = '/api/plugins/inspiration-board-sync';
-const SETTINGS_KEY = 'st_inspiration_board_capture_settings_v41';
+const SETTINGS_KEY = 'st_inspiration_board_capture_first_v41';
 const HISTORY_KEY = 'st_inspiration_board_capture_history_v41';
-const MAX_HISTORY = 180;
-const ROLE_FRAME_HINTS = Object.freeze({
-  face: ['face'], hair: ['hair'], body: ['body', 'pose'], outfit: ['outfit', 'clothing'],
-  expression: ['expression'], accessory: ['accessor'], prop: ['prop', 'weapon'], mood: ['mood', 'vibe'],
-  environment: ['environment', 'setting', 'location'], general: [],
-});
+const HISTORY_LIMIT = 180;
 const runtimes = new WeakMap();
 
 function escapeHtml(value = '') {
@@ -50,64 +53,30 @@ function safeAttr(value = '') {
   return escapeHtml(value).replace(/`/g, '&#096;');
 }
 
-function requestHeaders() {
+function headers() {
   const context = globalThis.SillyTavern?.getContext?.();
   return context?.getRequestHeaders?.({ omitContentType: true }) || {};
-}
-
-function readJsonStorage(key, fallback) {
-  try {
-    const value = JSON.parse(localStorage.getItem(key) || 'null');
-    return value ?? fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function writeJsonStorage(key, value) {
-  try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
-}
-
-function readSettings() {
-  return normalizeCaptureSettings(readJsonStorage(SETTINGS_KEY, {}));
-}
-
-function writeSettings(value) {
-  const settings = normalizeCaptureSettings(value);
-  writeJsonStorage(SETTINGS_KEY, settings);
-  return settings;
-}
-
-function readHistory() {
-  const history = readJsonStorage(HISTORY_KEY, []);
-  return Array.isArray(history) ? history : [];
-}
-
-function pushHistory(record) {
-  const history = readHistory();
-  history.unshift(record);
-  writeJsonStorage(HISTORY_KEY, history.slice(0, MAX_HISTORY));
 }
 
 function runtimeFor(app) {
   if (!runtimes.has(app)) {
     runtimes.set(app, {
-      modal: null,
-      tab: 'capture',
       captures: [],
       selected: new Set(),
-      pluginStatus: null,
-      filterProvider: 'all',
-      query: '',
-      clipboardUrl: '',
-      lastClipboardUrl: '',
       detailCache: new Map(),
       previewUrls: new Set(),
       previewObserver: null,
+      pluginStatus: null,
+      modal: null,
+      tab: 'capture',
+      query: '',
+      filterProvider: 'all',
+      clipboardUrl: '',
+      lastClipboardUrl: '',
+      lastPollAt: 0,
       pollTimer: null,
       installTimer: null,
       legacyBrowseOpen: null,
-      lastPollAt: 0,
     });
   }
   return runtimes.get(app);
@@ -117,6 +86,36 @@ function toast(app, message, type = 'info') {
   app.toast?.(message, type);
 }
 
+function readSettings() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
+    return defaultCaptureSettings(parsed);
+  } catch {
+    return defaultCaptureSettings();
+  }
+}
+
+function writeSettings(value) {
+  const settings = defaultCaptureSettings(value);
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  return settings;
+}
+
+function readHistory() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
+    return Array.isArray(parsed) ? parsed.slice(0, HISTORY_LIMIT) : [];
+  } catch {
+    return [];
+  }
+}
+
+function pushHistory(record) {
+  const history = readHistory();
+  history.unshift(record);
+  try { localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, HISTORY_LIMIT))); } catch {}
+}
+
 function revokePreviews(runtime) {
   runtime.previewObserver?.disconnect?.();
   runtime.previewObserver = null;
@@ -124,14 +123,14 @@ function revokePreviews(runtime) {
   runtime.previewUrls.clear();
 }
 
-function base64Bytes(value) {
+function bytesFromBase64(value) {
   const binary = atob(String(value || ''));
   return Uint8Array.from(binary, character => character.charCodeAt(0));
 }
 
 async function pluginStatus() {
   try {
-    const response = await fetch(`${API_ROOT}/status`, { headers: requestHeaders() });
+    const response = await fetch(`${API_ROOT}/status`, { headers: headers() });
     if (!response.ok) return null;
     return response.json();
   } catch {
@@ -141,63 +140,64 @@ async function pluginStatus() {
 
 async function listPendingCaptures() {
   try {
-    const response = await fetch(`${API_ROOT}/shares`, { headers: requestHeaders() });
+    const response = await fetch(`${API_ROOT}/shares`, { headers: headers() });
     if (!response.ok) return [];
-    const value = await response.json();
-    return Array.isArray(value) ? value : [];
+    const data = await response.json();
+    return Array.isArray(data) ? data : [];
   } catch {
     return [];
   }
 }
 
-async function fetchCaptureDetail(runtime, id, { fresh = false } = {}) {
-  if (!fresh && runtime.detailCache.has(id)) return runtime.detailCache.get(id);
-  const response = await fetch(`${API_ROOT}/shares/${encodeURIComponent(id)}`, { headers: requestHeaders() });
+async function fetchCapture(runtime, id) {
+  if (runtime.detailCache.has(id)) return runtime.detailCache.get(id);
+  const response = await fetch(`${API_ROOT}/shares/${encodeURIComponent(id)}`, { headers: headers() });
   if (!response.ok) throw new Error(`Could not read capture (HTTP ${response.status}).`);
-  const value = await response.json();
-  runtime.detailCache.set(id, value);
-  return value;
+  const share = await response.json();
+  runtime.detailCache.set(id, share);
+  return share;
 }
 
 async function deleteCapture(id) {
-  const response = await fetch(`${API_ROOT}/shares/${encodeURIComponent(id)}`, { method: 'DELETE', headers: requestHeaders() });
+  const response = await fetch(`${API_ROOT}/shares/${encodeURIComponent(id)}`, { method: 'DELETE', headers: headers() });
   if (!response.ok) throw new Error(`Could not delete capture (HTTP ${response.status}).`);
 }
 
-async function resolveRemotePage(url, provider = 'web') {
-  const response = await fetch(`${API_ROOT}/resolve-page?url=${encodeURIComponent(url)}`, { headers: requestHeaders() });
+async function resolveRemotePage(url, provider) {
+  const response = await fetch(`${API_ROOT}/resolve-page?url=${encodeURIComponent(url)}`, { headers: headers() });
   if (!response.ok) {
-    let message = `Could not resolve page (HTTP ${response.status}).`;
-    try { message = (await response.json())?.error || message; } catch {}
+    let message = `Could not resolve shared link (HTTP ${response.status}).`;
+    try { const body = await response.json(); if (body?.error) message = body.error; } catch {}
     throw new Error(message);
   }
   const data = await response.json();
-  const page = { url: data.finalUrl || url, provider: data.provider || provider, title: data.title || '', description: data.description || '' };
   return {
     ...data,
-    images: sortCandidates(mergeCandidates(data.images || [], page, 120)),
+    images: mergeCandidates(data.images || [], {
+      url: data.finalUrl || url,
+      provider: data.provider || provider,
+      title: data.title,
+      description: data.description,
+    }, 120),
   };
 }
 
-function sharedFileCandidates(share) {
-  const provider = captureProvider(share);
-  const pageUrl = extractCaptureUrl(share);
+async function remoteImageBlob(url) {
+  const response = await fetch(`${API_ROOT}/remote-image?url=${encodeURIComponent(url)}`, { headers: headers() });
+  if (!response.ok) throw new Error(`Could not fetch remote image (HTTP ${response.status}).`);
+  const blob = await response.blob();
+  if (!String(blob.type || response.headers.get('content-type') || '').startsWith('image/')) throw new Error('Resolved URL did not return an image.');
+  return blob;
+}
+
+function localCandidates(share) {
   return (share.files || []).map((file, index) => {
-    const blob = new Blob([base64Bytes(file.data)], { type: file.type || 'image/jpeg' });
-    return normalizeCandidate({
-      id: `share:${share.id}:${index}`,
-      url: pageUrl || `https://capture.invalid/${encodeURIComponent(share.id)}/${index}`,
-      pageUrl,
-      provider,
-      title: file.name || share.title || 'Shared image',
-      description: share.text || '',
-      source: 'android-share',
-    }, { url: pageUrl, provider, title: share.title, description: share.text }) && {
-      id: `share:${share.id}:${index}`,
-      url: pageUrl || '',
-      remoteUrl: '',
-      pageUrl,
-      provider,
+    const blob = new Blob([bytesFromBase64(file.data)], { type: file.type || 'image/jpeg' });
+    return {
+      id: `capture:${share.id}:${index}`,
+      url: '',
+      pageUrl: extractCaptureUrl(share),
+      provider: captureProvider(share),
       title: file.name || share.title || 'Shared image',
       description: share.text || '',
       alt: '',
@@ -207,99 +207,83 @@ function sharedFileCandidates(share) {
       localBlob: blob,
       localName: file.name || `shared-${index + 1}.jpg`,
     };
-  }).filter(Boolean);
+  });
 }
 
-async function resolveCapture(runtime, share, { allRemote = false } = {}) {
-  const detail = share.files ? share : await fetchCaptureDetail(runtime, share.id);
-  const files = sharedFileCandidates(detail);
-  if (files.length) return { share: detail, candidates: files, mode: 'files' };
-  const url = extractCaptureUrl(detail);
-  if (!url) throw new Error('This capture contains no image file or usable web URL.');
-  const resolved = await resolveRemotePage(url, captureProvider(detail));
-  const candidates = allRemote ? resolved.images : [pickBestCandidate(resolved.images)].filter(Boolean);
-  if (!candidates.length) throw new Error('The shared page did not expose a usable image. Open the source and share the image itself, then retry.');
-  return { share: detail, candidates, mode: 'url', resolved };
-}
-
-async function remoteBlob(candidate) {
-  if (candidate.localBlob instanceof Blob) return candidate.localBlob;
-  const url = candidate.remoteUrl || candidate.url;
-  const attempts = [
-    () => fetch(url, { mode: 'cors', credentials: 'omit', referrerPolicy: 'no-referrer' }),
-    () => fetch(`${API_ROOT}/remote-image?url=${encodeURIComponent(url)}`, { headers: requestHeaders() }),
-  ];
-  let lastError = null;
-  for (const attempt of attempts) {
-    try {
-      const response = await attempt();
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const blob = await response.blob();
-      if (!String(blob.type || response.headers.get('content-type') || '').startsWith('image/')) throw new Error('Remote URL did not return an image.');
-      if (blob.size > 40 * 1024 * 1024) throw new Error('Image is larger than 40 MB.');
-      return blob;
-    } catch (error) {
-      lastError = error;
-    }
+async function resolveCapture(runtime, summary, { allRemote = false } = {}) {
+  const share = await fetchCapture(runtime, summary.id);
+  const locals = localCandidates(share);
+  const url = extractCaptureUrl(share);
+  if (locals.length && !allRemote) return { share, candidates: locals, remote: null };
+  if (!url) {
+    if (locals.length) return { share, candidates: locals, remote: null };
+    throw new Error('This capture contains no image file or usable URL.');
   }
-  throw lastError || new Error('Could not download the image.');
+  const provider = captureProvider(share);
+  const remote = await resolveRemotePage(url, provider);
+  const candidates = allRemote ? [...locals, ...remote.images] : remote.images;
+  if (!candidates.length && locals.length) return { share, candidates: locals, remote };
+  if (!candidates.length) throw new Error('The shared page did not expose a usable image. Try sharing the individual image instead of the page.');
+  return { share, candidates, remote };
+}
+
+function duplicateDecision(settings, near, candidateName) {
+  if (!near) return 'new';
+  if (settings.nearDuplicateAction === 'reuse') return 'reuse';
+  if (settings.nearDuplicateAction === 'keep') return 'new';
+  return confirm(`“${candidateName}” looks similar to “${near.image.name}”.\n\nOK = keep the new copy\nCancel = reuse the existing image`) ? 'new' : 'reuse';
+}
+
+async function storedImageForCandidate(candidate, share, settings) {
+  let blob;
+  if (candidate.localBlob instanceof Blob) blob = candidate.localBlob;
+  else if (candidate.url) blob = await remoteImageBlob(candidate.url);
+  else throw new Error('Capture image data is missing.');
+  const file = new File([blob], candidate.localName || candidateFilename(candidate, blob.type), { type: blob.type || 'image/jpeg' });
+  const pending = await createImageRecord(file, { sourceUrl: candidate.pageUrl || share.url || candidate.url || '' });
+  const exact = await getImageByHash(pending.hash);
+  if (exact) return { record: exact, reused: true };
+  const near = (await findNearDuplicates(pending.dhash, settings.duplicateDistance ?? 7))[0];
+  if (near && duplicateDecision(settings, near, pending.name) === 'reuse') return { record: near.image, reused: true };
+  return { record: await putImage(pending), reused: false };
 }
 
 function frameForRole(board, role) {
-  const hints = ROLE_FRAME_HINTS[role] || [];
-  if (!hints.length) return null;
-  return (board.items || []).find(item => item.type === 'frame' && hints.some(hint => String(item.title || '').toLowerCase().includes(hint))) || null;
-}
-
-function positionInFrame(board, frame, width, height) {
-  const count = getFrameMembers(board, frame.id).length;
-  const innerWidth = Math.max(width, frame.width - 36);
-  const columns = Math.max(1, Math.floor(innerWidth / (width + 20)));
-  return {
-    x: frame.x + 18 + (count % columns) * (width + 20),
-    y: frame.y + 64 + Math.floor(count / columns) * (height + 20),
-  };
+  const label = ({ face: 'face', hair: 'hair', outfit: 'outfit', body: 'body', expression: 'expression', accessory: 'accessor', prop: 'prop', mood: 'mood', environment: 'mood' })[role];
+  if (!label) return null;
+  return board.items.find(item => item.type === 'frame' && String(item.title || '').toLowerCase().includes(label)) || null;
 }
 
 function boardCenter(board) {
   const view = board.view || { x: 0, y: 0, zoom: 1 };
-  const zoom = Math.max(0.08, Number(view.zoom) || 1);
-  return { x: -Number(view.x || 0) / zoom, y: -Number(view.y || 0) / zoom };
+  return { x: (-view.x + innerWidth / 2) / Math.max(.05, view.zoom || 1), y: (-view.y + innerHeight / 2) / Math.max(.05, view.zoom || 1) };
 }
 
-async function createOrReuseRecord(app, candidate, settings) {
-  const blob = await remoteBlob(candidate);
-  const file = new File([blob], candidate.localName || candidateFilename(candidate, blob.type), { type: blob.type || 'image/jpeg' });
-  const pending = await createImageRecord(file, { sourceUrl: candidate.pageUrl || candidate.remoteUrl || candidate.url || '' });
-  const exact = await getImageByHash(pending.hash);
-  if (exact) return { record: exact, reused: true, exact: true };
-  const near = (await findNearDuplicates(pending.dhash, app.state?.settings?.duplicateDistance ?? 7))[0] || null;
-  if (near && settings.nearDuplicateAction === 'reuse') return { record: near.image, reused: true, exact: false };
-  if (near && settings.nearDuplicateAction === 'ask') {
-    const keep = confirm(`This capture looks similar to “${near.image.name}”.\n\nOK = keep the new copy\nCancel = reuse the existing image`);
-    if (!keep) return { record: near.image, reused: true, exact: false };
-  }
-  return { record: await putImage(pending), reused: false, exact: false };
+function positionInFrame(board, frame, width, height) {
+  const members = getFrameMembers(board, frame.id);
+  const index = members.length;
+  const cols = Math.max(1, Math.floor((frame.width - 34) / (width + 22)));
+  return { x: frame.x + 18 + (index % cols) * (width + 22), y: frame.y + 72 + Math.floor(index / cols) * (height + 22) };
 }
 
-function sourceMetadata(candidate, share) {
-  const provider = candidate.provider || captureProvider(share);
-  const sourceUrl = candidate.pageUrl || extractCaptureUrl(share) || candidate.remoteUrl || candidate.url || '';
-  const tags = [...new Set([...sourceTags({ ...candidate, provider }), 'capture-first'])];
+function captureMetadata(candidate, share, provider) {
+  const sourceUrl = candidate.pageUrl || share.url || candidate.url || '';
   const notes = [
     candidate.description || share.text || '',
-    sourceUrl ? `Source: ${sourceUrl}` : '',
-    `Captured from: ${providerMeta(provider).label}`,
-    share.createdAt ? `Captured: ${new Date(share.createdAt).toLocaleString()}` : '',
-  ].filter(Boolean).join('\n\n').slice(0, 7000);
-  return { provider, sourceUrl, tags, notes };
+    sourceNote({ ...candidate, pageUrl: sourceUrl }),
+    `Captured from ${providerMeta(provider).label} · ${new Date(share.createdAt || Date.now()).toLocaleString()}`,
+  ].filter(Boolean).join('\n\n').slice(0, 8000);
+  const tags = [...new Set([...sourceTags({ provider }), 'captured', candidate.localBlob ? 'android-share' : 'url-share'])];
+  return { sourceUrl, notes, tags, provider };
 }
 
 async function importCandidate(app, candidate, share, targetId, boardId, settings) {
   const target = targetById(targetId);
   const board = app.state.boards.find(entry => entry.id === boardId) || app.activeBoard();
-  const { record, reused } = await createOrReuseRecord(app, candidate, settings);
-  const metadata = sourceMetadata(candidate, share);
+  const provider = captureProvider(share);
+  const stored = await storedImageForCandidate(candidate, share, settings);
+  const record = stored.record;
+  const metadata = captureMetadata(candidate, share, provider);
 
   if (target.placement === 'inbox') {
     let entry = board.inbox.find(existing => existing.imageId === record.id);
@@ -310,9 +294,9 @@ async function importCandidate(app, candidate, share, targetId, boardId, setting
     entry.role = target.role;
     entry.tags = [...new Set([...(entry.tags || []), ...metadata.tags])];
     entry.notes = metadata.notes;
-    entry.collection = entry.collection || `${providerMeta(metadata.provider).label} Captures`;
+    entry.collection = `${providerMeta(provider).label} Captures`;
     board.updatedAt = Date.now();
-    return { entry, item: null, reused };
+    return { item: null, entry, reused: stored.reused };
   }
 
   let item = board.items.find(existing => existing.type === 'image' && existing.imageId === record.id);
@@ -349,7 +333,7 @@ async function importCandidate(app, candidate, share, targetId, boardId, setting
     };
   }
   board.updatedAt = Date.now();
-  return { item, entry: null, reused };
+  return { item, entry: null, reused: stored.reused };
 }
 
 async function importCapture(app, share, { targetId, boardId, deleteAfter = null, openStudio = true } = {}) {
@@ -529,10 +513,10 @@ function historyViewHtml() {
 function settingsViewHtml(app) {
   const settings = readSettings();
   return `<div class="ib41-settings">
-    <section><h3>Quick-save defaults</h3><div class="ib41-settings-grid">${CAPTURE_PROVIDER_ORDER.map(provider => `<label>${providerLabel(provider)}<select data-setting-provider="${provider}">${targetOptions(settings.providerTargets[provider])}</select></label>`).join('')}<label>General quick target<select data-setting="quickTarget">${targetOptions(settings.quickTarget)}</select></label></div></section>
-    <section><h3>Capture behavior</h3><div class="ib41-settings-grid"><label class="ib41-check"><input type="checkbox" data-setting="deleteAfterImport" ${settings.deleteAfterImport ? 'checked' : ''}> Remove Capture Inbox item after successful import</label><label class="ib41-check"><input type="checkbox" data-setting="autoClipboardPrompt" ${settings.autoClipboardPrompt ? 'checked' : ''}> Offer web links found in clipboard when Capture Center opens</label><label>Similar-image handling<select data-setting="nearDuplicateAction"><option value="ask" ${settings.nearDuplicateAction === 'ask' ? 'selected' : ''}>Ask me</option><option value="reuse" ${settings.nearDuplicateAction === 'reuse' ? 'selected' : ''}>Reuse existing image</option><option value="keep" ${settings.nearDuplicateAction === 'keep' ? 'selected' : ''}>Keep new copy</option></select></label><label>Refresh Capture Inbox every<select data-setting="pollSeconds">${[15,30,60,120,300].map(value => `<option value="${value}" ${settings.pollSeconds === value ? 'selected' : ''}>${value < 60 ? `${value} sec` : `${value / 60} min`}</option>`).join('')}</select></label></div></section>
-    <section><h3>Compatibility tools</h3><p class="ib2-muted">The old embedded browser is intentionally de-emphasized because Pinterest and Cosmos frequently block it. The page scanner is still available as a fallback for sites that expose image metadata.</p><div class="ib41-settings-actions"><button data-ib41-legacy>Open legacy page scanner</button><button data-ib41-open-pwa>Open Android Capture App</button></div></section>
-    <div class="ib41-settings-actions"><button data-ib41-settings-reset>Reset</button><button class="primary" data-ib41-settings-save>Save capture settings</button></div>
+    <section><h3>Quick-save defaults</h3><div class="ib41-settings-grid">${CAPTURE_PROVIDER_ORDER.map(provider => `<label>${providerLabel(provider)}<select data-setting-provider="${provider}">${targetOptions(settings.providerTargets[provider])}</select></label>`).join('')}</div></section>
+    <section><h3>Capture behavior</h3><div class="ib41-settings-grid"><label>Default destination<select data-setting="quickTarget">${targetOptions(settings.quickTarget)}</select></label><label>Near duplicates<select data-setting="nearDuplicateAction"><option value="ask" ${settings.nearDuplicateAction === 'ask' ? 'selected' : ''}>Ask me</option><option value="reuse" ${settings.nearDuplicateAction === 'reuse' ? 'selected' : ''}>Reuse existing</option><option value="keep" ${settings.nearDuplicateAction === 'keep' ? 'selected' : ''}>Keep new copy</option></select></label><label>Refresh interval<select data-setting="pollSeconds">${[10,20,30,60,120].map(value => `<option value="${value}" ${settings.pollSeconds === value ? 'selected' : ''}>${value} sec</option>`).join('')}</select></label><label class="ib41-check"><input type="checkbox" data-setting="deleteAfterImport" ${settings.deleteAfterImport ? 'checked' : ''}> Remove successful capture from server Inbox</label><label class="ib41-check"><input type="checkbox" data-setting="autoClipboardPrompt" ${settings.autoClipboardPrompt ? 'checked' : ''}> Offer new clipboard links</label></div></section>
+    <section><h3>Fallback tools</h3><p class="ib2-muted">The old v0.4 page scanner is still available for sites that happen to allow server-side scanning.</p><button data-ib41-legacy>Open legacy page scanner</button></section>
+    <div class="ib41-settings-actions"><button data-ib41-settings-reset>Reset</button><button class="primary" data-ib41-settings-save>Save settings</button></div>
   </div>`;
 }
 
@@ -540,6 +524,7 @@ function renderCurrentView(app) {
   const runtime = runtimeFor(app);
   const container = runtime.modal?.querySelector('[data-ib41-view]');
   if (!container) return;
+  revokePreviews(runtime);
   if (runtime.tab === 'capture') container.innerHTML = captureViewHtml(app);
   else if (runtime.tab === 'recent') container.innerHTML = historyViewHtml();
   else container.innerHTML = settingsViewHtml(app);
@@ -550,13 +535,13 @@ function renderCurrentView(app) {
 async function hydrateCardPreview(app, card) {
   const runtime = runtimeFor(app);
   if (!card?.isConnected || card.dataset.previewLoaded) return;
-  card.dataset.previewLoaded = '1';
-  const share = runtime.captures.find(capture => String(capture.id) === card.dataset.ib41Capture);
-  if (!share) return;
-  const preview = card.querySelector('[data-ib41-preview]');
+  card.dataset.previewLoaded = 'loading';
   try {
+    const share = runtime.captures.find(capture => String(capture.id) === card.dataset.ib41Capture);
+    if (!share) return;
     const resolved = await resolveCapture(runtime, share);
-    const candidate = resolved.candidates[0];
+    const candidate = pickBestCandidate(resolved.candidates);
+    const preview = card.querySelector('[data-ib41-preview]');
     if (!candidate || !preview?.isConnected) return;
     let src = candidate.url;
     if (candidate.localBlob) {
@@ -916,6 +901,16 @@ export function installCaptureFirst(app) {
     settings: () => readSettings(),
     history: () => readHistory(),
     importUrl: (url, target = readSettings().quickTarget, boardId = app.activeBoard().id) => importUrlDirect(app, url, target, boardId),
+    importPending: async (captureId, target = readSettings().quickTarget, boardId = app.activeBoard().id, options = {}) => {
+      const runtime = runtimeFor(app);
+      let summary = runtime.captures.find(capture => String(capture.id) === String(captureId));
+      if (!summary) {
+        const captures = await listPendingCaptures();
+        summary = captures.find(capture => String(capture.id) === String(captureId));
+      }
+      if (!summary) throw new Error('Pending capture was not found. Refresh Capture Center and retry.');
+      return importCapture(app, summary, { targetId: target, boardId, ...options });
+    },
   };
   console.info(`[Inspiration Board] Capture-first workflow v${CAPTURE_VERSION} installed`);
   return true;
