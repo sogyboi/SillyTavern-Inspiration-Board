@@ -47,7 +47,7 @@ class CaptureBrowserActivity : Activity() {
     private val prefs by lazy { getSharedPreferences("capture-browser", MODE_PRIVATE) }
 
     @Volatile
-    private var browserUserAgent = "Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 InspirationBoardCapture/0.5.4"
+    private var browserUserAgent = "Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 InspirationBoardCapture/0.5.6"
 
     private val providerHomes = mapOf(
         "pinterest" to "https://www.pinterest.com/",
@@ -177,7 +177,7 @@ class CaptureBrowserActivity : Activity() {
             mediaPlaybackRequiresUserGesture = true
             builtInZoomControls = false
             displayZoomControls = false
-            userAgentString = "$userAgentString InspirationBoardCapture/0.5.4"
+            userAgentString = "$userAgentString InspirationBoardCapture/0.5.6"
         }
         // WebView APIs are UI-thread-only. Snapshot the UA once for worker-thread HTTP calls.
         browserUserAgent = webView.settings.userAgentString
@@ -470,37 +470,55 @@ private fun postCapture(server: String, context: PageCapture, target: String): S
         }
     }
 
-    val endpoint = URL("$server/api/plugins/inspiration-board-sync/capture-native")
-    val connection = endpoint.openConnection() as HttpURLConnection
-    connection.requestMethod = "POST"
-    connection.instanceFollowRedirects = false
-    connection.connectTimeout = 12_000
-    connection.readTimeout = 25_000
-    connection.doOutput = true
-    connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
-    connection.setRequestProperty("Accept", "application/json")
-    connection.setRequestProperty("X-CSRF-Token", session.token)
-    connection.setRequestProperty("Origin", server)
-    connection.setRequestProperty("Referer", "$server/")
-    connection.setRequestProperty("User-Agent", browserUserAgent)
-    if (session.cookie.isNotBlank()) connection.setRequestProperty("Cookie", session.cookie)
-
-    connection.outputStream.use { output ->
-        output.write(payload.toString().toByteArray(Charsets.UTF_8))
-    }
-
-    val code = connection.responseCode
-    val responseText = readConnectionText(connection, code)
-    connection.disconnect()
-    if (code !in 200..299) {
-        if (code == 404) throw IllegalStateException("Server plugin is too old for native save. Update inspiration-board-sync in Termux")
-        val jsonError = runCatching { JSONObject(responseText).optString("error") }.getOrDefault("").trim()
-        val fallback = responseText.replace(Regex("<[^>]+>"), " ").replace(Regex("\\s+"), " ").trim().take(220)
-        val detail = jsonError.ifBlank { fallback }
-        throw IllegalStateException("SillyTavern HTTP $code${if (detail.isNotBlank()) ": $detail" else ""}")
-    }
+    sendNativePayload(server, session, payload)
     return SaveResult(uploadedImage = downloaded != null)
 }
+
+    private fun sendNativePayload(server: String, session: StSession, payload: JSONObject): JSONObject {
+        val endpoint = URL("$server/api/plugins/inspiration-board-sync/capture-native")
+        val connection = endpoint.openConnection() as HttpURLConnection
+        connection.requestMethod = "POST"
+        connection.instanceFollowRedirects = false
+        connection.connectTimeout = 12_000
+        connection.readTimeout = 25_000
+        connection.doOutput = true
+        // Deliberately avoid application/json here. SillyTavern owns the global JSON parser;
+        // this private media type leaves the stream untouched until the plugin handles it.
+        connection.setRequestProperty("Content-Type", "application/x-inspiration-board-capture")
+        connection.setRequestProperty("Accept", "application/json")
+        connection.setRequestProperty("X-CSRF-Token", session.token)
+        connection.setRequestProperty("Origin", server)
+        connection.setRequestProperty("Referer", "$server/")
+        connection.setRequestProperty("User-Agent", browserUserAgent)
+        if (session.cookie.isNotBlank()) connection.setRequestProperty("Cookie", session.cookie)
+
+        connection.outputStream.use { output ->
+            output.write(payload.toString().toByteArray(Charsets.UTF_8))
+        }
+
+        val code = connection.responseCode
+        val responseText = readConnectionText(connection, code)
+        connection.disconnect()
+        if (code !in 200..299) {
+            if (code == 404) throw IllegalStateException("Server plugin is too old for native save. Update inspiration-board-sync in Termux")
+            val jsonError = runCatching { JSONObject(responseText).optString("error") }.getOrDefault("").trim()
+            val fallback = responseText.replace(Regex("<[^>]+>"), " ").replace(Regex("\\s+"), " ").trim().take(220)
+            val detail = jsonError.ifBlank { fallback }
+            throw IllegalStateException("SillyTavern HTTP $code${if (detail.isNotBlank()) ": $detail" else ""}")
+        }
+        return runCatching { JSONObject(responseText) }.getOrElse { JSONObject().put("ok", true) }
+    }
+
+    private fun mergeCookieHeader(vararg values: String): String {
+        val cookies = linkedMapOf<String, String>()
+        values.forEach { value ->
+            value.split(';').map(String::trim).filter { it.contains('=') }.forEach { part ->
+                val name = part.substringBefore('=').trim()
+                if (name.isNotBlank()) cookies[name] = part
+            }
+        }
+        return cookies.values.joinToString("; ")
+    }
 
     private fun fetchCsrfSession(server: String): StSession {
         val endpoint = URL("$server/csrf-token")
@@ -534,16 +552,9 @@ private fun postCapture(server: String, context: PageCapture, target: String): S
         val token = runCatching { JSONObject(responseText).optString("token") }.getOrDefault("")
         if (token.isBlank()) throw IllegalStateException("SillyTavern did not return a CSRF token")
 
-        val cookies = buildList {
-            if (existingCookie.isNotBlank()) add(existingCookie)
-            addAll(setCookies)
-            val webViewCookie = cookieFor(server)
-            if (webViewCookie.isNotBlank()) add(webViewCookie)
-        }
-            .flatMap { value -> value.split(';').map(String::trim) }
-            .filter { it.contains('=') }
-            .distinct()
-            .joinToString("; ")
+        // Keep one value per cookie name. The Set-Cookie values from this CSRF response
+        // are authoritative and override any older WebView/session copy.
+        val cookies = mergeCookieHeader(existingCookie, setCookies.joinToString("; "))
 
         return StSession(token = token, cookie = cookies)
     }
@@ -696,7 +707,7 @@ private fun postCapture(server: String, context: PageCapture, target: String): S
     }
 
     private fun testServer(server: String) {
-        Toast.makeText(this, "Testing SillyTavern…", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Testing full save path…", Toast.LENGTH_SHORT).show()
         thread {
             try {
                 val session = fetchCsrfSession(server)
@@ -714,10 +725,17 @@ private fun postCapture(server: String, context: PageCapture, target: String): S
                 val status = runCatching { JSONObject(body) }.getOrElse { JSONObject() }
                 val version = status.optString("version").ifBlank { "unknown" }
                 val capabilities = status.optJSONArray("capabilities")
-                val supportsNative = (0 until (capabilities?.length() ?: 0)).any { capabilities?.optString(it) == "native-json-capture" }
-                if (!supportsNative) throw IllegalStateException("server plugin $version is too old; update inspiration-board-sync in Termux")
+                val supportsRaw = (0 until (capabilities?.length() ?: 0)).any { capabilities?.optString(it) == "native-raw-capture" }
+                if (!supportsRaw) throw IllegalStateException("server plugin $version is too old for verified native saves; update inspiration-board-sync in Termux")
+
+                // Exercise the same CSRF-protected POST transport used by the purple + button.
+                val probe = sendNativePayload(server, session, JSONObject().put("probe", true))
+                if (!probe.optBoolean("ok") || !probe.optBoolean("probe")) {
+                    throw IllegalStateException("native capture POST probe returned an unexpected response")
+                }
+
                 runOnUiThread {
-                    Toast.makeText(this, "Connected · Inspiration Board Sync $version · native save ready", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, "Connected · Sync $version · POST save path verified", Toast.LENGTH_LONG).show()
                     prefs.edit().putString("server", server).apply()
                 }
             } catch (error: Throwable) {

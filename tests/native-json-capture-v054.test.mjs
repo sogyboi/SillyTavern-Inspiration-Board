@@ -9,9 +9,10 @@ const start = activity.indexOf('private fun postCapture');
 const end = activity.indexOf('private fun fetchCsrfSession');
 const post = activity.slice(start, end);
 
-test('native direct save uses JSON instead of multipart', () => {
+test('native direct save uses private raw JSON transport instead of multipart or global JSON parsing', () => {
   assert.match(post, /capture-native/);
-  assert.match(post, /application\/json; charset=utf-8/);
+  assert.match(post, /application\/x-inspiration-board-capture/);
+  assert.doesNotMatch(post, /application\/json; charset=utf-8/);
   assert.match(post, /Base64\.encodeToString/);
   assert.doesNotMatch(post, /multipart\/form-data/);
   assert.doesNotMatch(post, /writeField\(/);
@@ -24,10 +25,10 @@ test('server plugin exposes CSRF-protected native JSON capture route', () => {
   assert.match(plugin, /native-json-capture/);
   assert.match(plugin, /MAX_NATIVE_IMAGE_BYTES = 12 \* 1024 \* 1024/);
   assert.match(plugin, /Could not save native capture/);
-  assert.match(pluginPackage, /"version": "0\.5\.5"/);
+  assert.match(pluginPackage, /"version": "0\.5\.6"/);
 });
 
 test('native test warns when installed server plugin is too old', () => {
-  assert.match(activity, /server plugin .* is too old; update inspiration-board-sync in Termux/);
-  assert.match(activity, /native save ready/);
+  assert.match(activity, /server plugin .* is too old for verified native saves; update inspiration-board-sync in Termux/);
+  assert.match(activity, /POST save path verified/);
 });

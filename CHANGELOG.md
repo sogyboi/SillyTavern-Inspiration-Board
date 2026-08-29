@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.6
+
+- Reworked native Capture Browser saving to use `application/x-inspiration-board-capture` instead of `application/json`, bypassing SillyTavern's global JSON body parser entirely.
+- Inspiration Board Sync now reads the private native request stream itself inside the route try/catch with a 20 MB request limit and structured 400/413 errors.
+- Added a no-write `probe` mode to `/capture-native`.
+- The companion Settings **Test** button now performs a real CSRF-protected POST probe through the same transport as the purple `+` button; a successful test now verifies the actual save path.
+- Hardened native session cookie construction so duplicate cookie names cannot send stale and fresh SillyTavern session values together.
+- Added regression tests for the private raw transport, POST probe, stream limits, and cookie de-duplication.
+
 ## 0.5.5
 
 - Fixed the v0.5.4 native JSON save route throwing SillyTavern's generic HTML HTTP 500 before the plugin handler could run.

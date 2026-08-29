@@ -4,10 +4,10 @@
   "requires": [],
   "optional": [],
   "dependencies": [],
-  "js": "launcher-v55.js",
+  "js": "launcher-v56.js",
   "css": "style-v2.css",
   "author": "sogyboi",
-  "version": "0.5.5",
+  "version": "0.5.6",
   "homePage": "https://github.com/sogyboi/SillyTavern-Inspiration-Board",
   "auto_update": true,
   "minimum_client_version": "1.12.0"

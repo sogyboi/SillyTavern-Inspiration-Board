@@ -13,9 +13,9 @@ import {
   targetLabel,
 } from '../capture-browser-core-v5.js';
 
-test('Capture Browser version and release point to v0.5.4', () => {
-  assert.equal(CAPTURE_BROWSER_VERSION, '0.5.4');
-  assert.match(CAPTURE_BROWSER_RELEASE, /capture-browser-v0\.5\.4$/);
+test('Capture Browser version and release point to v0.5.6', () => {
+  assert.equal(CAPTURE_BROWSER_VERSION, '0.5.6');
+  assert.match(CAPTURE_BROWSER_RELEASE, /capture-browser-v0\.5\.6$/);
 });
 
 test('normalizes local SillyTavern server URLs', () => {

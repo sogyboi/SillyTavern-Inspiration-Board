@@ -12,12 +12,13 @@ export const info = Object.freeze({
   description: 'Per-user server storage, Android share-target inbox, and safe remote image/page bridge for SillyTavern Inspiration Board.',
 });
 
-const VERSION = '0.5.5';
+const VERSION = '0.5.6';
 const PLUGIN_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(PLUGIN_DIR, 'public');
 const MAX_PAGE_BYTES = 6 * 1024 * 1024;
 const MAX_REMOTE_IMAGE_BYTES = 40 * 1024 * 1024;
 const MAX_NATIVE_IMAGE_BYTES = 12 * 1024 * 1024;
+const MAX_NATIVE_REQUEST_BYTES = 20 * 1024 * 1024;
 const REMOTE_TIMEOUT_MS = 18_000;
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -335,6 +336,36 @@ async function shareList(req) {
   return rows.sort((a, b) => b.createdAt - a.createdAt);
 }
 
+
+async function readNativeCapturePayload(req) {
+  const contentType = String(req.get('content-type') || '').split(';')[0].trim().toLowerCase();
+  if (contentType !== 'application/x-inspiration-board-capture') {
+    return req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body) ? req.body : {};
+  }
+
+  const chunks = [];
+  let total = 0;
+  for await (const chunk of req) {
+    const bytes = Buffer.from(chunk);
+    total += bytes.length;
+    if (total > MAX_NATIVE_REQUEST_BYTES) {
+      const error = new Error('Native capture request is larger than 20 MB.');
+      error.statusCode = 413;
+      throw error;
+    }
+    chunks.push(bytes);
+  }
+  if (!total) return {};
+
+  try {
+    return JSON.parse(Buffer.concat(chunks, total).toString('utf8'));
+  } catch {
+    const error = new Error('Native capture request is not valid JSON.');
+    error.statusCode = 400;
+    throw error;
+  }
+}
+
 export async function init(router) {
   router.use('/app', express.static(PUBLIC_DIR, {
     index: 'index.html',
@@ -351,7 +382,7 @@ export async function init(router) {
         workspaceCount: workspaces.length,
         pendingShareCount: shares.length,
         shareTargetUrl: `/api/plugins/${info.id}/app/`,
-        capabilities: ['workspace-sync', 'android-share', 'remote-page-resolver', 'remote-image-proxy', 'native-json-capture'],
+        capabilities: ['workspace-sync', 'android-share', 'remote-page-resolver', 'remote-image-proxy', 'native-json-capture', 'native-raw-capture'],
       });
     } catch (error) {
       console.error('[Inspiration Board Sync] status failed', error);
@@ -467,8 +498,9 @@ export async function init(router) {
 // stream can throw before this handler's try/catch and surface as Express's generic HTML 500.
 router.post('/capture-native', async (req, res) => {
   try {
+    const body = await readNativeCapturePayload(req);
+    if (body.probe === true) return res.json({ ok: true, probe: true, version: VERSION });
     await ensureDirectories(req);
-    const body = req.body && typeof req.body === 'object' ? req.body : {};
     const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
     const folder = path.join(shareRoot(req), id);
     await fs.mkdir(folder, { recursive: true });
@@ -509,7 +541,8 @@ router.post('/capture-native', async (req, res) => {
     res.json({ ok: true, id, fileCount: files.length });
   } catch (error) {
     console.error('[Inspiration Board Sync] native capture failed', error);
-    res.status(500).json({ error: `Could not save native capture: ${error.message}` });
+    const status = Number(error?.statusCode) || 500;
+    res.status(status).json({ error: `Could not save native capture: ${error.message}` });
   }
 });
 
