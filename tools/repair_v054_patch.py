@@ -26,4 +26,15 @@ if old_test_success not in activity:
 activity = activity.replace(old_test_success, new_test_success, 1)
 '''
 text = text[:start] + replacement + text[end:]
+
+# Preserve Kotlin escape sequences inside the Python-generated source.
+text = text.replace(
+    r'            put("text", "${buildMarker(context, target)}\n${context.pageUrl}")',
+    r'            put("text", "${buildMarker(context, target)}\\n${context.pageUrl}")',
+)
+text = text.replace(
+    r'Regex("\\s+")',
+    r'Regex("\\\\s+")',
+)
+
 path.write_text(text)
