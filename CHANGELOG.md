@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.0
+
+- Added a touch-first Browse Hub with Pinterest, Cosmos, Web, and Android Captures tabs.
+- Added Pinterest and Cosmos search/open flows, URL paste, experimental live-site embedding, and external-open fallbacks for sites that block iframes.
+- Added direct page scanning and image extraction, with an optional server-side resolver for pages blocked by browser CORS.
+- Added one-tap image destinations for Inbox, Board, Main Portrait, Face, Hair, Body/Pose, Outfit, Art Style, Mood, Environment, and Generation Studio references.
+- Added source metadata, provider tags, import history, exact duplicate reuse, and near-duplicate warnings for browser imports.
+- Added a safe remote-image proxy to the optional sync plugin for sites that block browser-side image downloads.
+- Hardened remote fetches against local/private-network targets, redirect abuse, oversized responses, and long-running requests.
+- Expanded the Android share target so image shares and URL-only shares from Pinterest, Cosmos, Chrome, and Gallery can appear in Browse → Captures.
+- Fixed sticky-note dragging: note bodies are now selectable/scrollable and notes move only from a dedicated drag grip; resize and menu controls stay isolated.
+- Added a dedicated unfolded portrait Z Fold layout with a two-column masonry browser, larger touch targets, full-height Browse view, bottom-sheet import actions, and compact board chrome.
+- Added Browse Core tests for provider detection, search URLs, URL extraction, candidate de-duplication, targets, filenames, source notes, image detection, and Fold layout selection.
+
 ## 0.3.0
 
 - Added Character Blueprint fields for canonical identity, face, hair, body, outfit, accessories, palette, art style, must-keep traits, allowed changes, and avoid rules.

@@ -1,4 +1,6 @@
+import dns from 'node:dns/promises';
 import fs from 'node:fs/promises';
+import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
@@ -7,12 +9,15 @@ import multer from 'multer';
 export const info = Object.freeze({
   id: 'inspiration-board-sync',
   name: 'Inspiration Board Sync',
-  description: 'Per-user server storage and Android share-target inbox for SillyTavern Inspiration Board.',
+  description: 'Per-user server storage, Android share-target inbox, and safe remote image/page bridge for SillyTavern Inspiration Board.',
 });
 
-const VERSION = '0.3.0';
+const VERSION = '0.4.0';
 const PLUGIN_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(PLUGIN_DIR, 'public');
+const MAX_PAGE_BYTES = 6 * 1024 * 1024;
+const MAX_REMOTE_IMAGE_BYTES = 40 * 1024 * 1024;
+const REMOTE_TIMEOUT_MS = 18_000;
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { files: 32, fileSize: 40 * 1024 * 1024, fields: 24 },
@@ -65,6 +70,223 @@ async function atomicWrite(filename, data) {
 async function readJson(filename, fallback = null) {
   try { return JSON.parse(await fs.readFile(filename, 'utf8')); }
   catch { return fallback; }
+}
+
+function firstHttpUrl(...values) {
+  for (const value of values) {
+    const match = String(value || '').match(/https?:\/\/[^\s<>"'\]\)]+/i);
+    if (match) return match[0].slice(0, 4000);
+  }
+  return '';
+}
+
+function isPrivateIpv4(address) {
+  const parts = address.split('.').map(Number);
+  if (parts.length !== 4 || parts.some(part => !Number.isInteger(part) || part < 0 || part > 255)) return true;
+  const [a, b] = parts;
+  return a === 0
+    || a === 10
+    || a === 127
+    || (a === 100 && b >= 64 && b <= 127)
+    || (a === 169 && b === 254)
+    || (a === 172 && b >= 16 && b <= 31)
+    || (a === 192 && b === 0)
+    || (a === 192 && b === 168)
+    || (a === 198 && (b === 18 || b === 19))
+    || a >= 224;
+}
+
+function isPrivateAddress(address) {
+  const value = String(address || '').toLowerCase().split('%')[0];
+  const type = net.isIP(value);
+  if (type === 4) return isPrivateIpv4(value);
+  if (type !== 6) return true;
+  if (value === '::' || value === '::1') return true;
+  if (value.startsWith('fc') || value.startsWith('fd')) return true;
+  if (/^fe[89ab]/.test(value)) return true;
+  if (value.startsWith('ff')) return true;
+  const mapped = value.match(/::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (mapped) return isPrivateIpv4(mapped[1]);
+  return false;
+}
+
+async function validateRemoteUrl(value) {
+  let url;
+  try { url = new URL(String(value || '')); }
+  catch { throw new Error('Invalid remote URL.'); }
+  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Only http and https URLs are allowed.');
+  if (url.username || url.password) throw new Error('Remote URLs with embedded credentials are not allowed.');
+  if (url.href.length > 5000) throw new Error('Remote URL is too long.');
+  const host = url.hostname.toLowerCase().replace(/\.$/, '');
+  if (!host || host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) throw new Error('Local/private hosts are not allowed.');
+  if (net.isIP(host) && isPrivateAddress(host)) throw new Error('Local/private network addresses are not allowed.');
+  const addresses = await dns.lookup(host, { all: true, verbatim: true });
+  if (!addresses.length || addresses.some(entry => isPrivateAddress(entry.address))) throw new Error('Remote host resolved to a local/private network address.');
+  url.hash = '';
+  return url;
+}
+
+async function readResponseBytes(response, maxBytes) {
+  const declared = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > maxBytes) throw new Error(`Remote response is larger than ${Math.round(maxBytes / 1024 / 1024)} MB.`);
+  if (!response.body) return Buffer.alloc(0);
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => {});
+      throw new Error(`Remote response is larger than ${Math.round(maxBytes / 1024 / 1024)} MB.`);
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks, total);
+}
+
+async function fetchRemote(value, { accept = '*/*', maxBytes = MAX_PAGE_BYTES } = {}) {
+  let current = await validateRemoteUrl(value);
+  for (let redirects = 0; redirects <= 5; redirects++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REMOTE_TIMEOUT_MS);
+    let response;
+    try {
+      response = await fetch(current, {
+        redirect: 'manual',
+        signal: controller.signal,
+        headers: {
+          Accept: accept,
+          'Accept-Language': 'en-US,en;q=0.8',
+          'User-Agent': 'Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 Chrome/140 Safari/537.36 InspirationBoard/0.4',
+        },
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      const location = response.headers.get('location');
+      if (!location) throw new Error('Remote site returned a redirect without a destination.');
+      current = await validateRemoteUrl(new URL(location, current).href);
+      continue;
+    }
+    if (!response.ok) throw new Error(`Remote site returned HTTP ${response.status}.`);
+    return {
+      url: current.href,
+      response,
+      bytes: await readResponseBytes(response, maxBytes),
+      contentType: String(response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase(),
+    };
+  }
+  throw new Error('Remote site redirected too many times.');
+}
+
+function decodeMarkup(value = '') {
+  return String(value)
+    .replace(/\\u002F/gi, '/')
+    .replace(/\\u003A/gi, ':')
+    .replace(/\\u0026/gi, '&')
+    .replace(/\\\//g, '/')
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>');
+}
+
+function tagAttribute(tag, name) {
+  const match = String(tag || '').match(new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i'));
+  return decodeMarkup(match?.[1] ?? match?.[2] ?? match?.[3] ?? '');
+}
+
+function metaValue(html, key) {
+  for (const tag of String(html || '').match(/<meta\b[^>]*>/gi) || []) {
+    const property = tagAttribute(tag, 'property') || tagAttribute(tag, 'name');
+    if (property.toLowerCase() === String(key).toLowerCase()) return tagAttribute(tag, 'content');
+  }
+  return '';
+}
+
+function pageTitle(html) {
+  return (metaValue(html, 'og:title') || decodeMarkup(String(html).match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || '')).replace(/<[^>]+>/g, '').trim().slice(0, 300);
+}
+
+function pageDescription(html) {
+  return (metaValue(html, 'og:description') || metaValue(html, 'description') || '').trim().slice(0, 2000);
+}
+
+function providerFor(url) {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    if (host.includes('pinterest.') || host === 'pin.it' || host.endsWith('.pinimg.com')) return 'pinterest';
+    if (host === 'cosmos.so' || host.endsWith('.cosmos.so')) return 'cosmos';
+  } catch {}
+  return 'web';
+}
+
+function normalizeImageUrl(value, baseUrl) {
+  const decoded = decodeMarkup(value).trim().replace(/^['"]|['"]$/g, '');
+  if (!decoded || decoded.startsWith('data:') || decoded.startsWith('blob:')) return '';
+  try {
+    const url = new URL(decoded, baseUrl);
+    if (!['http:', 'https:'].includes(url.protocol)) return '';
+    url.hash = '';
+    if (url.hostname.endsWith('pinimg.com')) url.pathname = url.pathname.replace(/\/(?:236x|474x|564x|736x)\//, '/originals/');
+    return url.href;
+  } catch {
+    return '';
+  }
+}
+
+function extractImagesFromHtml(html, pageUrl) {
+  const title = pageTitle(html);
+  const description = pageDescription(html);
+  const provider = providerFor(pageUrl);
+  const seen = new Set();
+  const images = [];
+  const add = (value, extra = {}) => {
+    const url = normalizeImageUrl(value, pageUrl);
+    if (!url || seen.has(url)) return;
+    seen.add(url);
+    images.push({
+      url,
+      pageUrl,
+      provider,
+      title: String(extra.title || title || '').slice(0, 240),
+      description: String(extra.description || description || '').slice(0, 2000),
+      alt: String(extra.alt || '').slice(0, 500),
+      width: Math.max(0, Number(extra.width) || 0),
+      height: Math.max(0, Number(extra.height) || 0),
+      source: extra.source || 'page',
+    });
+  };
+
+  for (const key of ['og:image', 'twitter:image', 'twitter:image:src']) {
+    const value = metaValue(html, key);
+    if (value) add(value, { source: key });
+  }
+  for (const tag of html.match(/<(?:img|source)\b[^>]*>/gi) || []) {
+    for (const attr of ['src', 'data-src', 'data-lazy-src']) {
+      const value = tagAttribute(tag, attr);
+      if (value) add(value, { alt: tagAttribute(tag, 'alt'), width: tagAttribute(tag, 'width'), height: tagAttribute(tag, 'height'), source: attr });
+    }
+    const srcset = tagAttribute(tag, 'srcset') || tagAttribute(tag, 'data-srcset');
+    if (srcset) {
+      const entries = srcset.split(',').map(entry => entry.trim().split(/\s+/)[0]).filter(Boolean);
+      if (entries.length) add(entries.at(-1), { alt: tagAttribute(tag, 'alt'), source: 'srcset' });
+    }
+  }
+
+  const decoded = decodeMarkup(html);
+  const urlPattern = /https?:\/\/[^\s"'<>\\]+/gi;
+  for (const match of decoded.match(urlPattern) || []) {
+    const clean = match.replace(/[),.;]+$/, '');
+    if (/pinimg\.com/i.test(clean) || /\.(?:avif|gif|jpe?g|png|webp)(?:[?#][^\s]*)?$/i.test(clean)) add(clean, { source: 'page-data' });
+    if (images.length >= 160) break;
+  }
+
+  return { title, description, provider, images: images.slice(0, 120) };
 }
 
 async function workspaceList(req) {
@@ -127,11 +349,52 @@ export async function init(router) {
         version: VERSION,
         workspaceCount: workspaces.length,
         pendingShareCount: shares.length,
-        shareTargetUrl: '/api/plugins/inspiration-board-sync/app/',
+        shareTargetUrl: `/api/plugins/${info.id}/app/`,
+        capabilities: ['workspace-sync', 'android-share', 'remote-page-resolver', 'remote-image-proxy'],
       });
     } catch (error) {
       console.error('[Inspiration Board Sync] status failed', error);
       res.status(500).json({ error: error.message });
+    }
+  });
+
+  router.get('/resolve-page', async (req, res) => {
+    try {
+      const requested = String(req.query.url || '');
+      const remote = await fetchRemote(requested, { accept: 'text/html,application/xhtml+xml,image/avif,image/webp,image/*;q=0.8,*/*;q=0.5', maxBytes: MAX_PAGE_BYTES });
+      if (remote.contentType.startsWith('image/')) {
+        return res.json({
+          requestedUrl: requested,
+          finalUrl: remote.url,
+          provider: providerFor(remote.url),
+          title: '',
+          description: '',
+          images: [{ url: remote.url, pageUrl: remote.url, provider: providerFor(remote.url), title: '', description: '', width: 0, height: 0, source: 'direct-image' }],
+        });
+      }
+      if (!remote.contentType.includes('html') && !remote.contentType.startsWith('text/')) return res.status(415).json({ error: `Unsupported page content type: ${remote.contentType || 'unknown'}` });
+      const html = remote.bytes.toString('utf8');
+      const extracted = extractImagesFromHtml(html, remote.url);
+      res.setHeader('Cache-Control', 'private, max-age=60');
+      res.json({ requestedUrl: requested, finalUrl: remote.url, ...extracted });
+    } catch (error) {
+      console.warn('[Inspiration Board Sync] page resolve failed', error.message);
+      res.status(400).json({ error: error.message });
+    }
+  });
+
+  router.get('/remote-image', async (req, res) => {
+    try {
+      const remote = await fetchRemote(String(req.query.url || ''), { accept: 'image/avif,image/webp,image/png,image/jpeg,image/gif,image/*;q=0.8', maxBytes: MAX_REMOTE_IMAGE_BYTES });
+      if (!remote.contentType.startsWith('image/')) return res.status(415).json({ error: 'Remote URL did not return an image.' });
+      res.setHeader('Content-Type', remote.contentType);
+      res.setHeader('Content-Length', remote.bytes.length);
+      res.setHeader('Cache-Control', 'private, max-age=300');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.send(remote.bytes);
+    } catch (error) {
+      console.warn('[Inspiration Board Sync] remote image failed', error.message);
+      res.status(400).json({ error: error.message });
     }
   });
 
@@ -212,11 +475,12 @@ export async function init(router) {
         await fs.writeFile(path.join(folder, filename), file.buffer);
         files.push({ filename, name: file.originalname || filename, type: file.mimetype || 'image/jpeg', size: file.size });
       }
+      const text = String(req.body?.text || '').slice(0, 20_000);
       const metadata = {
         id,
         title: String(req.body?.title || 'Shared inspiration').slice(0, 200),
-        text: String(req.body?.text || '').slice(0, 20_000),
-        url: String(req.body?.url || '').slice(0, 2000),
+        text,
+        url: firstHttpUrl(req.body?.url, text),
         createdAt: Date.now(),
         files,
       };

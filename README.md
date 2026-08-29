@@ -1,6 +1,49 @@
 # SillyTavern Inspiration Board
 
-A touch-first visual character-design and image-generation workspace for SillyTavern. It is designed around an unfolded Samsung Z Fold in portrait orientation, while also supporting standard phones, tablets, and desktop browsers.
+A touch-first visual character-design, inspiration-browsing, and image-generation workspace for SillyTavern. It is designed around an unfolded Samsung Z Fold in portrait orientation, while also supporting standard phones, tablets, and desktop browsers.
+
+## v0.4 Browse Hub
+
+Open **Browse** from the Inspiration Board rail or top bar. The Browse Hub has four tabs:
+
+- **Pinterest** — search Pinterest, paste a Pin/board/profile URL, try the live site, or open Pinterest externally.
+- **Cosmos** — search Cosmos elements, paste a Cosmos page, try the live site, or open Cosmos externally.
+- **Web** — scan compatible image pages or direct image URLs.
+- **Captures** — receive Android image/link shares through the optional Inspiration Board Sync PWA.
+
+When a compatible page exposes its images, Browse shows them in a touch-first masonry feed. Tap **＋** on an image and send it directly to:
+
+- Inbox
+- Board
+- Main portrait
+- Face reference
+- Hair reference
+- Body / pose reference
+- Outfit reference
+- Art-style reference
+- Mood / vibe reference
+- Environment reference
+- Generation Studio reference
+
+Imports preserve the original page URL, source/provider tags, description when available, and duplicate information. Exact duplicates reuse the stored image; visually similar images can be reviewed before a second copy is saved.
+
+Pinterest, Cosmos, and other sites can block cross-site browser fetching or iframe embedding. The extension therefore uses several fallbacks: direct browser import first, the optional server-side page/image bridge second, and external-open + Android Share/Paste when a site still blocks access.
+
+### Note dragging and Z Fold layout
+
+Sticky notes now move only from a dedicated **drag note** grip. The note body can be scrolled and selected without accidentally moving the note, while the menu and resize handle remain independent.
+
+The unfolded portrait Fold layout has its own responsive breakpoint: compact board chrome, larger touch controls, a full-height Browse Hub, two-column masonry where space permits, and a bottom-sheet reference picker.
+
+### Optional Browse/Android bridge
+
+The extension itself still works with browser storage only. For the most reliable Pinterest/Cosmos page scanning, CORS-blocked image importing, Android Share, and phone/PC sync, install the included server plugin:
+
+```text
+server-plugin/inspiration-board-sync
+```
+
+The v0.4 plugin adds a guarded remote page resolver and image proxy. Remote requests are limited to HTTP/HTTPS public-network targets, validated across redirects, size-limited, and timed out. The included PWA can receive both image shares and URL-only shares from Android apps.
 
 ## v0.3 Generation Studio
 
@@ -142,7 +185,8 @@ When installed in SillyTavern's `plugins` directory with server plugins enabled,
 - Save, load, merge, list, and delete server copies
 - Phone/PC board transfer
 - An installable Android PWA share target
-- A pending Share Inbox for images shared from Pinterest, Gallery, or another Android app
+- A pending Share Inbox for images or URLs shared from Pinterest, Cosmos, Gallery, Chrome, or another Android app
+- A guarded remote page/image bridge for Browse Hub fallbacks
 
 The Sync & Share panel contains the install command and status check.
 
@@ -195,7 +239,7 @@ Open it from the image icon in SillyTavern's top bar or from **Extensions → In
 
 ## Update
 
-Use **Manage extensions → Inspiration Board → Update**, then fully reload SillyTavern. Existing v0.1 and v0.2 board data remains compatible. Create a normal board backup before a major update as a precaution.
+Use **Manage extensions → Inspiration Board → Update**, then fully reload SillyTavern. Existing boards remain compatible. Create a normal board backup before a major update as a precaution.
 
 ## Development
 
