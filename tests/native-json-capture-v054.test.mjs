@@ -19,11 +19,12 @@ test('native direct save uses JSON instead of multipart', () => {
 });
 
 test('server plugin exposes CSRF-protected native JSON capture route', () => {
-  assert.match(plugin, /router\.post\('\/capture-native', express\.json\(\{ limit: '20mb' \}\)/);
+  assert.match(plugin, /router\.post\('\/capture-native', async \(req, res\) =>/);
+  assert.doesNotMatch(plugin, /router\.post\('\/capture-native',\s*express\.json/);
   assert.match(plugin, /native-json-capture/);
   assert.match(plugin, /MAX_NATIVE_IMAGE_BYTES = 12 \* 1024 \* 1024/);
   assert.match(plugin, /Could not save native capture/);
-  assert.match(pluginPackage, /"version": "0\.5\.4"/);
+  assert.match(pluginPackage, /"version": "0\.5\.5"/);
 });
 
 test('native test warns when installed server plugin is too old', () => {

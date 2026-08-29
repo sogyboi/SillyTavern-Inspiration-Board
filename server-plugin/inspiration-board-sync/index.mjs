@@ -12,7 +12,7 @@ export const info = Object.freeze({
   description: 'Per-user server storage, Android share-target inbox, and safe remote image/page bridge for SillyTavern Inspiration Board.',
 });
 
-const VERSION = '0.5.4';
+const VERSION = '0.5.5';
 const PLUGIN_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(PLUGIN_DIR, 'public');
 const MAX_PAGE_BYTES = 6 * 1024 * 1024;
@@ -462,7 +462,10 @@ export async function init(router) {
     } catch (error) { console.error(error); res.status(500).json({ error: error.message }); }
   });
 
-router.post('/capture-native', express.json({ limit: '20mb' }), async (req, res) => {
+// SillyTavern globally parses application/json before server plugins are mounted.
+// Do not attach a second JSON body parser here: re-reading an already-consumed request
+// stream can throw before this handler's try/catch and surface as Express's generic HTML 500.
+router.post('/capture-native', async (req, res) => {
   try {
     await ensureDirectories(req);
     const body = req.body && typeof req.body === 'object' ? req.body : {};
