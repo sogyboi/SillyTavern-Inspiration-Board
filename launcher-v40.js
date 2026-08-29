@@ -1,5 +1,5 @@
 import './launcher-v30.js?v=0.4.0';
-import { installBrowseHub } from './browse-v4.js?v=0.4.0';
+import { installBrowseHub } from './browse-hub-v4.js?v=0.4.0';
 
 const VERSION = '0.4.0';
 let timer = null;
