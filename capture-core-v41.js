@@ -40,6 +40,13 @@ export function normalizeCaptureSettings(input = {}) {
   };
 }
 
+// Compatibility alias used by Capture Center. Keeping this export explicit also
+// lets module-link tests catch accidental renames before a release can break the
+// entire launcher chain in the browser.
+export function defaultCaptureSettings(input = {}) {
+  return normalizeCaptureSettings(input);
+}
+
 export function providerMeta(providerId) {
   return BROWSE_PROVIDERS[providerId] || BROWSE_PROVIDERS.web;
 }
