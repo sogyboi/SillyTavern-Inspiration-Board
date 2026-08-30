@@ -68,12 +68,12 @@ test('server bridge uses SillyTavern OpenRouter secret and canonical Images API'
   assert.match(bridgeSource, /input_references/);
 });
 
-test('server plugin and launcher expose the v0.5.8 Quick Generate path', () => {
+test('server plugin and v0.5.8 Quick Generate bridge remain available under newer launchers', () => {
   assert.match(pluginIndexSource, /openrouter-image-api/);
   assert.match(pluginIndexSource, /installOpenRouterImagesBridge/);
   assert.match(launcherSource, /__ibOpenRouterTouchFallback/);
   assert.match(launcherSource, /stopImmediatePropagation/);
   assert.match(launcherSource, /openrouter-gen-v58\.js\?v=0\.5\.8/);
-  assert.equal(manifest.version, '0.5.8');
-  assert.equal(manifest.js, 'launcher-v58.js');
+  assert.equal(manifest.version, '0.5.9');
+  assert.equal(manifest.js, 'launcher-v59.js');
 });
