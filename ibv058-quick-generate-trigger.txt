@@ -1,1 +1,0 @@
-apply v0.5.8 quick generate wiring retry 1
