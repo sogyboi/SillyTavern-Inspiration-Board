@@ -3,18 +3,18 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { veniceImagePrice, veniceModelIsUncensored, veniceModelTask } from '../venice-gen-v60.js';
 
-const launcher = fs.readFileSync(new URL('../launcher-v60.js', import.meta.url), 'utf8');
-const veniceUi = fs.readFileSync(new URL('../venice-gen-v60.js', import.meta.url), 'utf8');
+const launcher = fs.readFileSync(new URL('../launcher-v61.js', import.meta.url), 'utf8');
+const veniceUi = fs.readFileSync(new URL('../venice-gen-v61.js', import.meta.url), 'utf8');
 const openRouterBrowser = fs.readFileSync(new URL('../openrouter-browser-v60.js', import.meta.url), 'utf8');
-const bridge = fs.readFileSync(new URL('../server-plugin/inspiration-board-sync/venice-media-v60.mjs', import.meta.url), 'utf8');
+const bridge = fs.readFileSync(new URL('../server-plugin/inspiration-board-sync/venice-media-v61.mjs', import.meta.url), 'utf8');
 const plugin = fs.readFileSync(new URL('../server-plugin/inspiration-board-sync/index.mjs', import.meta.url), 'utf8');
 const manifest = JSON.parse(fs.readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
 
 const video = (id, model_type = 'text-to-video') => ({ id, type: 'video', model_spec: { name: id, constraints: { model_type } } });
 
-test('v0.6.0 launcher exposes provider switching without importing the v0.5.9 capture handler', () => {
-  assert.equal(manifest.version, '0.6.0');
-  assert.equal(manifest.js, 'launcher-v60.js');
+test('v0.6.x launcher exposes provider switching without importing the v0.5.9 capture handler', () => {
+  assert.equal(manifest.version, '0.6.1');
+  assert.equal(manifest.js, 'launcher-v61.js');
   assert.match(launcher, /openVeniceGenerator/);
   assert.match(launcher, /openOpenRouterGenerator/);
   assert.match(launcher, /st_inspiration_board_media_provider_v60/);
@@ -87,8 +87,8 @@ test('OpenRouter model browser avoids one giant unsorted list and labels moderat
   assert.match(openRouterBrowser, /not a guarantee/);
 });
 
-test('server plugin advertises Venice media capability at v0.6.0', () => {
-  assert.match(plugin, /const VERSION = '0\.6\.0'/);
+test('server plugin advertises Venice media capability under v0.6.1', () => {
+  assert.match(plugin, /const VERSION = '0\.6\.1'/);
   assert.match(plugin, /installVeniceMediaBridge/);
   assert.match(plugin, /venice-image-video/);
 });

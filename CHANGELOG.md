@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.1
+
+- Fixed Venice reference integrity: text-to-image Generation models now clearly show **References NOT sent** instead of displaying an active-looking reference strip for an API path that cannot accept images.
+- Edit / reference models now show an explicit **Reference ACTIVE** plan with the exact source-image count and which board image will be the base.
+- Auto reference selection now prioritizes the board's Main portrait as the base image when there is no explicit selection, then adds role-sorted basket references behind it.
+- Multi-image edit input is only used when live capabilities, pricing metadata, or a currently documented multi-edit model indicate multiple image inputs; otherwise one base image is sent for reliability.
+- Single-image `/image/edit` now uses Venice's current `model` field; `/image/multi-edit` keeps the documented `modelId` field.
+- Successful edit responses now include a local reference receipt (`reference_count`, endpoint, and model-field mode), and the Generate UI displays that receipt so you can verify the bridge actually sent the source image.
+- Original stored image blobs continue to be sent, never board thumbnails.
+- Inspiration Board Sync is now **v0.6.1** and must be recopied/restarted once for the reference receipt and current edit routing.
+
 ## 0.6.0
 
 - Added **Venice** as a second Generate provider beside OpenRouter, with native image generation, image edit/reference generation, text-to-video, image-to-video, and reference-to-video.
