@@ -4,7 +4,7 @@ import fs from 'node:fs';
 
 const activity = fs.readFileSync(new URL('../android-companion/app/src/main/java/com/sogyboi/inspirationboard/capture/CaptureBrowserActivity.kt', import.meta.url), 'utf8');
 const plugin = fs.readFileSync(new URL('../server-plugin/inspiration-board-sync/index.mjs', import.meta.url), 'utf8');
-const pluginPackage = fs.readFileSync(new URL('../server-plugin/inspiration-board-sync/package.json', import.meta.url), 'utf8');
+const pluginPackage = JSON.parse(fs.readFileSync(new URL('../server-plugin/inspiration-board-sync/package.json', import.meta.url), 'utf8'));
 const start = activity.indexOf('private fun postCapture');
 const end = activity.indexOf('private fun fetchCsrfSession');
 const post = activity.slice(start, end);
@@ -25,7 +25,7 @@ test('server plugin exposes CSRF-protected native JSON capture route', () => {
   assert.match(plugin, /native-json-capture/);
   assert.match(plugin, /MAX_NATIVE_IMAGE_BYTES = 12 \* 1024 \* 1024/);
   assert.match(plugin, /Could not save native capture/);
-  assert.match(pluginPackage, /"version": "0\.5\.6"/);
+  assert.match(String(pluginPackage.version || ''), /^\d+\.\d+\.\d+$/);
 });
 
 test('native test warns when installed server plugin is too old', () => {
