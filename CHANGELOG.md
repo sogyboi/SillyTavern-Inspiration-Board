@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.0
+
+- Added **Venice** as a second Generate provider beside OpenRouter, with native image generation, image edit/reference generation, text-to-video, image-to-video, and reference-to-video.
+- Added server-side Venice API-key storage through SillyTavern's own `secrets.json`; the Venice key is never returned to browser JavaScript after saving.
+- Added live Venice model discovery instead of a hardcoded catalog, including availability, privacy, task capabilities, image price metadata, and live model traits.
+- Added explicit **Uncensored / NSFW-capable** badges and filters for Venice models/variants advertised as uncensored, including the live `most_uncensored` image trait and explicit uncensored variants. Image Safe mode can be switched off for raw model output; video uncensored support stays model-specific.
+- Added exact Venice video quotes before queueing, persistent async video job status, polling, finished inline video previews, fullscreen playback, and MP4 save actions.
+- Routed video references by model family: Grok flat references, Seedance/Wan flat `reference_image_urls`, and Kling O3 structured Elements plus scene references based on board reference roles.
+- Added provider-first model browsing so OpenRouter and Venice are separate catalogs instead of one giant list.
+- Added OpenRouter search, price/name/newest sorting, reference-support filtering, explicit uncensored/NSFW labeling when advertised, and honest `Unmoderated`/`Moderated` badges from OpenRouter's live `top_provider.is_moderated` metadata.
+- Generate remembers the last provider and continues to preserve provider-specific controls/prompts between visits.
+- Inspiration Board Sync is now **v0.6.0** and must be recopied/restarted once to enable Venice. The Android Capture Browser APK remains compatible at v0.5.6.
+
 ## 0.5.8
 
 - Fixed the board's original **Generate image · OpenRouter** / Quick Generate modal so it now shows the same live OpenRouter image pricing added to Generation Studio in v0.5.7.

@@ -5,9 +5,10 @@ This optional SillyTavern server plugin adds:
 - Per-user compressed workspace storage for phone/PC sync.
 - A safe remote page resolver and remote-image bridge for sites that block browser-side fetching.
 - An installable Android share-target PWA and pending Capture Inbox.
-- The **v0.5.8 OpenRouter Images API bridge** used by Quick Generate for real `input_references` support.
+- The **OpenRouter Images API bridge** used by Quick Generate for real `input_references` support.
+- The **v0.6.0 Venice media bridge** for live image/video models, secure Venice API-key storage, image generation/editing, exact video quotes, and async video jobs.
 
-The plugin runtime is **v0.5.8**. Inspiration Board itself can still open without it, but **Quick Generate reference-image requests require this v0.5.8+ server plugin**. Older plugin copies only know the legacy SillyTavern/OpenRouter generation route and cannot correctly send current Image API `input_references`.
+The plugin runtime is **v0.6.0**. Inspiration Board itself can still open without it, but **OpenRouter reference-image requests require v0.5.8+ and Venice image/video generation requires v0.6.0+**. Updating the browser extension does not update a manually copied server plugin.
 
 ## Install / update
 
@@ -27,7 +28,7 @@ enableServerPlugins: true
 
 Then **fully restart the SillyTavern server**. Updating the browser extension alone does not update a manually copied server-plugin folder.
 
-After restart, `/api/plugins/inspiration-board-sync/status` should report version `0.5.8` or newer and include the capability `openrouter-image-api`.
+After restart, `/api/plugins/inspiration-board-sync/status` should report version `0.6.0` or newer and include both `openrouter-image-api` and `venice-image-video`.
 
 ## OpenRouter image generation
 
@@ -40,6 +41,12 @@ The `/openrouter-images` route keeps the OpenRouter API key server-side by readi
 - `input_references`
 
 This is especially important for models whose OpenRouter Image API metadata explicitly requires or limits reference images. Quick Generate checks those live capabilities before sending the request.
+
+## Venice image + video generation
+
+The Venice bridge keeps the Venice API key server-side. In **Generate → Venice**, save the key once; the browser sends it to this plugin over the authenticated SillyTavern session, the plugin validates it, then stores it in SillyTavern's `secrets.json` under `api_key_venice`. The key is never returned to browser JavaScript.
+
+The bridge exposes local authenticated routes for live Venice model metadata/traits, balance, image generation/editing, exact video quotes, queue/retrieve/complete, and model-family-specific reference routing. See `VENICE_MEDIA_GENERATION.md` in the repository root for the user workflow.
 
 ## Android share target
 

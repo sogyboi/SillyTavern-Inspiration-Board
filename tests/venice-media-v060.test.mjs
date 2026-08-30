@@ -62,7 +62,7 @@ test('Venice bridge covers live models, image generation and async video lifecyc
   assert.match(bridge, /referenceImageUrls/);
   assert.match(bridge, /reference_image_urls/);
   assert.match(bridge, /elements/);
-  assert.match(bridge, /scene_image_urls/);
+  assert.match(bridge, /image_urls/);
 });
 
 test('Venice client exposes model search/sorting, NSFW filter, exact quote and video status', () => {

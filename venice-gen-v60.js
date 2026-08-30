@@ -76,7 +76,10 @@ function privacy(model) { return String(modelSpec(model)?.privacy || '').toLower
 export function veniceModelTask(model) {
   if (model?._kind === 'inpaint') return 'edit';
   if (model?.type !== 'video' && model?._kind !== 'video') return 'generate';
-  const raw = String(constraints(model)?.model_type || model?.id || '').toLowerCase();
+  const id = String(model?.id || '').toLowerCase();
+  // Reference-to-video models can still report the broad model_type as image-to-video.
+  if (id.includes('reference-to-video')) return 'reference-to-video';
+  const raw = String(constraints(model)?.model_type || id).toLowerCase();
   if (raw.includes('reference-to-video')) return 'reference-to-video';
   if (raw.includes('image-to-video')) return 'image-to-video';
   if (raw.includes('upscale')) return 'upscale';
@@ -281,7 +284,7 @@ function sortModels(models, sortMode) {
 }
 
 function balanceText(payload) {
-  const candidates = [payload?.balance?.usd, payload?.usd, payload?.balance, payload?.available_balance, payload?.available];
+  const candidates = [payload?.balances?.usd, payload?.balance?.usd, payload?.usd, payload?.balance, payload?.available_balance, payload?.available];
   const value = candidates.map(Number).find(Number.isFinite);
   return Number.isFinite(value) ? `$${value.toFixed(2)} Venice balance` : '';
 }
@@ -376,26 +379,30 @@ export async function openVeniceGenerator(app, { openOpenRouter } = {}) {
   };
 
   const selectedModel = () => models.find(model => model.id === modelSelect.value) || null;
-  const persist = () => saveSettings({
-    ...settings,
-    media,
-    imageModel: media === 'image' ? modelSelect.value : settings.imageModel,
-    videoModel: media === 'video' ? modelSelect.value : settings.videoModel,
-    search: search.value,
-    task: task.value,
-    safety: safety.value,
-    sort: sort.value,
-    aspectRatio: aspect.value,
-    resolution: resolution.value,
-    duration: duration.value,
-    variants: Number(variants.value) || 1,
-    safeMode: safeMode.checked,
-    audio: audio.checked,
-    referenceSource: refSource.value,
-    addToBoard: addBoard.checked,
-    prompt: prompt.value,
-    negativePrompt: negative.value,
-  });
+  const persist = () => {
+    const next = {
+      ...settings,
+      media,
+      imageModel: media === 'image' ? modelSelect.value : settings.imageModel,
+      videoModel: media === 'video' ? modelSelect.value : settings.videoModel,
+      search: search.value,
+      task: task.value,
+      safety: safety.value,
+      sort: sort.value,
+      aspectRatio: aspect.value,
+      resolution: resolution.value,
+      duration: duration.value,
+      variants: Number(variants.value) || 1,
+      safeMode: safeMode.checked,
+      audio: audio.checked,
+      referenceSource: refSource.value,
+      addToBoard: addBoard.checked,
+      prompt: prompt.value,
+      negativePrompt: negative.value,
+    };
+    Object.assign(settings, next);
+    saveSettings(next);
+  };
 
   const updateTaskOptions = () => {
     const options = media === 'image'
@@ -450,7 +457,8 @@ export async function openVeniceGenerator(app, { openOpenRouter } = {}) {
     q('[data-v-duration-wrap]').hidden = media !== 'video';
     q('[data-v-variants-wrap]').hidden = media !== 'image' || modelTask === 'edit';
     q('[data-v-safe-wrap]').hidden = media !== 'image';
-    q('[data-v-audio-wrap]').hidden = media !== 'video' || !(c.audio || c.audio_configurable);
+    const supportsAudioConfig = c.audio_configurable === true || c.supportsAudioConfig === true;
+    q('[data-v-audio-wrap]').hidden = media !== 'video' || !supportsAudioConfig;
     q('[data-v-board-wrap]').hidden = media !== 'image';
     aspect.innerHTML = optionHtml(aspects.length ? aspects : ['1:1'], aspects.includes(settings.aspectRatio) ? settings.aspectRatio : aspects[0] || '1:1');
     resolution.innerHTML = optionHtml(resolutions.length ? resolutions : [''], resolutions.includes(settings.resolution) ? settings.resolution : resolutions[0] || '');
@@ -466,10 +474,23 @@ export async function openVeniceGenerator(app, { openOpenRouter } = {}) {
     clearTimeout(quoteTimer);
     const model = selectedModel();
     if (!configured || media !== 'video' || !model) return;
+    const c = constraints(model);
+    const modelAspects = listConstraint(model, 'aspectRatios', 'aspect_ratios');
+    const modelResolutions = listConstraint(model, 'resolutions');
+    const supportsAudioConfig = c.audio_configurable === true || c.supportsAudioConfig === true;
     quoteBox.textContent = 'Checking exact Venice video quote…';
     quoteTimer = setTimeout(async () => {
       try {
-        const response = await api('/venice/video/quote', { method: 'POST', body: { model: model.id, duration: duration.value, resolution: resolution.value || undefined, aspect_ratio: aspect.value || undefined, audio: audio.checked } });
+        const response = await api('/venice/video/quote', {
+          method: 'POST',
+          body: {
+            model: model.id,
+            duration: duration.value,
+            resolution: modelResolutions.length ? resolution.value : undefined,
+            aspect_ratio: modelAspects.length ? aspect.value : undefined,
+            audio: supportsAudioConfig ? audio.checked : undefined,
+          },
+        });
         const data = await response.json();
         quoteBox.textContent = Number.isFinite(Number(data?.quote)) ? `Exact Venice quote: $${Number(data.quote).toFixed(3)} for this video.` : 'Venice returned a quote response without a numeric USD value.';
       } catch (error) {
@@ -585,12 +606,14 @@ export async function openVeniceGenerator(app, { openOpenRouter } = {}) {
         const refs = needsRefs ? await referenceData(app, currentRefs, 3) : [];
         if (needsRefs && !refs.length) throw new Error('This Venice edit/reference model needs at least one board reference image.');
         setStatus(`Sending Venice image request · ${modelName(model)}${veniceModelIsUncensored(model, traits) ? ' · uncensored model' : ''}…`);
+        const modelAspects = listConstraint(model, 'aspectRatios', 'aspect_ratios');
+        const modelResolutions = listConstraint(model, 'resolutions');
         const response = await api('/venice/image', { method: 'POST', body: {
           model: model.id,
           prompt: text,
           negative_prompt: negative.value.trim(),
-          aspect_ratio: aspect.value || undefined,
-          resolution: resolution.value || undefined,
+          aspect_ratio: modelAspects.length ? aspect.value : undefined,
+          resolution: modelResolutions.length ? resolution.value : undefined,
           variants: needsRefs ? 1 : Number(variants.value) || 1,
           safe_mode: safeMode.checked,
           format: 'webp',
@@ -623,21 +646,35 @@ export async function openVeniceGenerator(app, { openOpenRouter } = {}) {
         if ((modelTask === 'image-to-video' || modelTask === 'reference-to-video') && !refs.length) throw new Error(`${taskLabel(modelTask)} requires at least one board reference image.`);
         let quote = null;
         try {
-          const quoteData = await (await api('/venice/video/quote', { method: 'POST', body: { model: model.id, duration: duration.value, resolution: resolution.value || undefined, aspect_ratio: aspect.value || undefined, audio: audio.checked } })).json();
+          const videoConstraints = constraints(model);
+          const modelAspects = listConstraint(model, 'aspectRatios', 'aspect_ratios');
+          const modelResolutions = listConstraint(model, 'resolutions');
+          const supportsAudioConfig = videoConstraints.audio_configurable === true || videoConstraints.supportsAudioConfig === true;
+          const quoteData = await (await api('/venice/video/quote', { method: 'POST', body: {
+            model: model.id,
+            duration: duration.value,
+            resolution: modelResolutions.length ? resolution.value : undefined,
+            aspect_ratio: modelAspects.length ? aspect.value : undefined,
+            audio: supportsAudioConfig ? audio.checked : undefined,
+          } })).json();
           quote = Number.isFinite(Number(quoteData?.quote)) ? Number(quoteData.quote) : null;
         } catch {}
         setStatus(`Queueing Venice video${quote != null ? ` · exact quote $${quote.toFixed(3)}` : ''}…`);
         jobStatus(`Venice video · queueing${quote != null ? ` · $${quote.toFixed(3)}` : ''}`);
+        const videoConstraints = constraints(model);
+        const videoAspects = listConstraint(model, 'aspectRatios', 'aspect_ratios');
+        const videoResolutions = listConstraint(model, 'resolutions');
+        const videoAudioConfigurable = videoConstraints.audio_configurable === true || videoConstraints.supportsAudioConfig === true;
         const queueData = await (await api('/venice/video/queue', { method: 'POST', body: {
           model: model.id,
           prompt: text,
           negative_prompt: negative.value.trim(),
           duration: duration.value,
-          resolution: resolution.value || undefined,
-          aspect_ratio: aspect.value || undefined,
-          audio: audio.checked,
+          resolution: videoResolutions.length ? resolution.value : undefined,
+          aspect_ratio: videoAspects.length ? aspect.value : undefined,
+          audio: videoAudioConfigurable ? audio.checked : undefined,
           image_url: modelTask === 'image-to-video' ? refs[0]?.dataUrl : undefined,
-          reference_images: modelTask === 'reference-to-video' ? refs.map(entry => entry.dataUrl) : [],
+          reference_entries: modelTask === 'reference-to-video' ? refs.map(entry => ({ url: entry.dataUrl, role: entry.item?.role || 'general' })) : [],
         } })).json();
         const queueId = queueData.queue_id;
         const queuedModel = queueData.model || model.id;

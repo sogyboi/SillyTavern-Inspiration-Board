@@ -87,6 +87,21 @@ function stripDataUrl(value) {
   return index >= 0 ? input.slice(index + marker.length) : input;
 }
 
+function normalizeReferenceEntries(value, max = 7) {
+  if (!Array.isArray(value)) return [];
+  const rows = value.slice(0, max).map(entry => ({
+    url: String(entry?.url || entry?.dataUrl || '').trim(),
+    role: String(entry?.role || 'general').toLowerCase().slice(0, 60),
+  })).filter(entry => /^(?:data:image\/[a-zA-Z0-9.+-]+;base64,|https?:\/\/)/.test(entry.url));
+  const total = rows.reduce((sum, entry) => sum + entry.url.length, 0);
+  if (total > MAX_REFERENCE_CHARS) {
+    const error = new Error('Reference images are too large for one Venice request.');
+    error.statusCode = 413;
+    throw error;
+  }
+  return rows;
+}
+
 function safeGenerationBody(body) {
   const source = asObject(body);
   const payload = {
@@ -115,7 +130,7 @@ function safeVideoBody(body) {
   const source = asObject(body);
   const payload = {
     model: cleanText(source.model, 300),
-    prompt: cleanText(source.prompt, 10_000),
+    prompt: cleanText(source.prompt, 2500),
     duration: cleanText(source.duration || '5s', 12),
   };
   if (source.negative_prompt) payload.negative_prompt = cleanText(source.negative_prompt, 10_000);
@@ -126,14 +141,38 @@ function safeVideoBody(body) {
   if (source.image_url) payload.image_url = cleanText(source.image_url, MAX_REFERENCE_CHARS);
   if (source.end_image_url) payload.end_image_url = cleanText(source.end_image_url, MAX_REFERENCE_CHARS);
 
-  const refs = normalizeImageInputs(source.reference_images, 7);
+
+  const entries = normalizeReferenceEntries(source.reference_entries, 7);
+  const refs = entries.length ? entries.map(entry => entry.url) : normalizeImageInputs(source.reference_images, 7);
   const model = payload.model.toLowerCase();
   if (refs.length) {
     if (model.includes('grok-imagine') && model.includes('reference-to-video')) {
+      // Grok Imagine R2V uses Venice's flat camelCase reference list.
       payload.referenceImageUrls = refs;
     } else if (model.includes('kling-o3') && model.includes('reference-to-video')) {
-      payload.scene_image_urls = refs.slice(0, 4);
+      // Kling O3 R2V uses structured identity Elements plus scene references.
+      const sourceEntries = entries.length ? entries : refs.map(url => ({ url, role: 'general' }));
+      const sceneRoles = new Set(['environment', 'mood', 'setting', 'scene', 'background']);
+      const identity = sourceEntries.filter(entry => !sceneRoles.has(entry.role));
+      const scenes = sourceEntries.filter(entry => sceneRoles.has(entry.role));
+      if (identity.length) {
+        const primary = identity.slice(0, 4);
+        payload.elements = [{
+          frontal_image_url: primary[0].url,
+          ...(primary.length > 1 ? { reference_image_urls: primary.slice(1).map(entry => entry.url) } : {}),
+        }];
+        for (const entry of identity.slice(4, 7)) payload.elements.push({ frontal_image_url: entry.url });
+        if (!/@Element1\b/i.test(payload.prompt)) payload.prompt = `@Element1 ${payload.prompt}`;
+      }
+      const roomForScenes = Math.max(0, 7 - identity.length);
+      if (scenes.length && roomForScenes) {
+        payload.image_urls = scenes.slice(0, Math.min(4, roomForScenes)).map(entry => entry.url);
+        if (!/@Image1\b/i.test(payload.prompt)) payload.prompt = `${payload.prompt} Use @Image1 as a scene/style reference.`;
+      } else if (!identity.length) {
+        payload.image_urls = refs.slice(0, 4);
+      }
     } else {
+      // Seedance, Wan and other flat R2V families use the documented snake_case list.
       payload.reference_image_urls = refs;
     }
   }
