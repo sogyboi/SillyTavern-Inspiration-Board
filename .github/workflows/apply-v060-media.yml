@@ -22,7 +22,7 @@ jobs:
         with:
           node-version: "22"
       - name: Apply v0.6.0 product wiring
-        run: python tools/apply_v060.py
+        run: python tools/apply_v060_fixed.py
       - name: Verify full repository
         run: |
           npm test
