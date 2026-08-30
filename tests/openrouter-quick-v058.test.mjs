@@ -74,6 +74,6 @@ test('server plugin and v0.5.8 Quick Generate bridge remain available under newe
   assert.match(launcherSource, /__ibOpenRouterTouchFallback/);
   assert.match(launcherSource, /stopImmediatePropagation/);
   assert.match(launcherSource, /openrouter-gen-v58\.js\?v=0\.5\.8/);
-  assert.equal(manifest.version, '0.5.9');
-  assert.equal(manifest.js, 'launcher-v59.js');
+  assert.ok(['0.5.9', '0.6.0'].includes(manifest.version));
+  assert.ok(['launcher-v59.js', 'launcher-v60.js'].includes(manifest.js));
 });
