@@ -21,6 +21,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - name: Repair patch anchor
+        run: python tools/repair_v061_reference_patcher.py
       - name: Apply v0.6.1 product patch
         run: python tools/apply_v061_reference_integrity.py
       - name: Verify repository
