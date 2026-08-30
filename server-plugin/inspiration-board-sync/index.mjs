@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import multer from 'multer';
 import { installOpenRouterImagesBridge } from './openrouter-images-v58.mjs';
-import { installVeniceMediaBridge } from './venice-media-v60.mjs';
+import { installVeniceMediaBridge } from './venice-media-v61.mjs';
 
 export const info = Object.freeze({
   id: 'inspiration-board-sync',
@@ -14,7 +14,7 @@ export const info = Object.freeze({
   description: 'Per-user server storage, Android share-target inbox, and safe remote image/page bridge for SillyTavern Inspiration Board.',
 });
 
-const VERSION = '0.6.0';
+const VERSION = '0.6.1';
 const PLUGIN_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(PLUGIN_DIR, 'public');
 const MAX_PAGE_BYTES = 6 * 1024 * 1024;
@@ -386,7 +386,7 @@ export async function init(router) {
         workspaceCount: workspaces.length,
         pendingShareCount: shares.length,
         shareTargetUrl: `/api/plugins/${info.id}/app/`,
-        capabilities: ['workspace-sync', 'android-share', 'remote-page-resolver', 'remote-image-proxy', 'native-json-capture', 'native-raw-capture', 'openrouter-image-api', 'venice-image-video'],
+        capabilities: ['workspace-sync', 'android-share', 'remote-page-resolver', 'remote-image-proxy', 'native-json-capture', 'native-raw-capture', 'openrouter-image-api', 'venice-image-video', 'venice-reference-receipts'],
       });
     } catch (error) {
       console.error('[Inspiration Board Sync] status failed', error);

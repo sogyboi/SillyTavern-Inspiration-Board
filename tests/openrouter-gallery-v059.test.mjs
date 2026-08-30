@@ -7,8 +7,8 @@ const launcher = fs.readFileSync(new URL('../launcher-v59.js', import.meta.url),
 const manifest = JSON.parse(fs.readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
 
 test('v0.5.9 generated gallery remains available under newer launchers', () => {
-  assert.ok(['0.5.9', '0.6.0'].includes(manifest.version));
-  assert.ok(['launcher-v59.js', 'launcher-v60.js'].includes(manifest.js));
+  assert.match(String(manifest.version || ''), /^\d+\.\d+\.\d+$/);
+  assert.match(String(manifest.js || ''), /^launcher-v\d+\.js$/);
   assert.match(launcher, /installGeneratedGallery/);
   assert.match(launcher, /openrouter-gen-v58\.js\?v=0\.5\.9/);
 });
