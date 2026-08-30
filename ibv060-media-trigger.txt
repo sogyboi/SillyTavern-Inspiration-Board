@@ -1,1 +1,0 @@
-apply v0.6.0 Venice image video integration retry 3
