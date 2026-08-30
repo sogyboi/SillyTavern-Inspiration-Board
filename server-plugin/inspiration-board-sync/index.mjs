@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import multer from 'multer';
+import { installOpenRouterImagesBridge } from './openrouter-images-v58.mjs';
 
 export const info = Object.freeze({
   id: 'inspiration-board-sync',
@@ -12,7 +13,7 @@ export const info = Object.freeze({
   description: 'Per-user server storage, Android share-target inbox, and safe remote image/page bridge for SillyTavern Inspiration Board.',
 });
 
-const VERSION = '0.5.6';
+const VERSION = '0.5.8';
 const PLUGIN_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(PLUGIN_DIR, 'public');
 const MAX_PAGE_BYTES = 6 * 1024 * 1024;
@@ -367,6 +368,7 @@ async function readNativeCapturePayload(req) {
 }
 
 export async function init(router) {
+  installOpenRouterImagesBridge(router);
   router.use('/app', express.static(PUBLIC_DIR, {
     index: 'index.html',
     fallthrough: true,
@@ -382,7 +384,7 @@ export async function init(router) {
         workspaceCount: workspaces.length,
         pendingShareCount: shares.length,
         shareTargetUrl: `/api/plugins/${info.id}/app/`,
-        capabilities: ['workspace-sync', 'android-share', 'remote-page-resolver', 'remote-image-proxy', 'native-json-capture', 'native-raw-capture'],
+        capabilities: ['workspace-sync', 'android-share', 'remote-page-resolver', 'remote-image-proxy', 'native-json-capture', 'native-raw-capture', 'openrouter-image-api'],
       });
     } catch (error) {
       console.error('[Inspiration Board Sync] status failed', error);

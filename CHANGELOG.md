@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.8
+
+- Fixed the board's original **Generate image · OpenRouter** / Quick Generate modal so it now shows the same live OpenRouter image pricing added to Generation Studio in v0.5.7.
+- Model choices now show unit-aware price text plus live reference support (`no refs`, optional maximum, or required minimum/maximum).
+- Quick Generate now remembers model, aspect ratio, image count, reference source, reference toggle, board/Inbox destination, and the prompt itself as soon as they change instead of only after a successful Generate click.
+- Reference compatibility is read from OpenRouter's dedicated Image API `supported_parameters.input_references` metadata instead of guessed from model names. Supported aspect ratios and output-count limits also follow each model's live capability record.
+- Added a dedicated OpenRouter Images API server bridge using SillyTavern's existing server-side OpenRouter secret, so reference-guided generation uses `POST /api/v1/images` with `input_references` instead of SillyTavern's older chat-completions image path.
+- Generation references now use the original stored image rather than the board thumbnail, preventing minimum-reference-size failures on providers such as Recraft Styles.
+- Added explicit style-reference handling for models such as Recraft V4 Styles Vector: the UI marks style matching as the model's purpose instead of promising identity-preserving editing.
+- Inspiration Board Sync is now v0.5.8 and must be recopied/restarted for modern reference generation. Non-reference Quick Generate can still fall back to SillyTavern's legacy route if the bridge is unavailable.
+
 ## 0.5.7
 
 - Added a searchable OpenRouter image-model picker with price text directly beside model names.

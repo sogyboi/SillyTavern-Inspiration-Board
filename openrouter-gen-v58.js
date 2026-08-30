@@ -163,7 +163,7 @@ export function modelBatchEstimate(model, count = 1) {
   if (summary.exactFlat && Number.isFinite(Number(summary.flatPerImage))) {
     return { exact: true, total: Number(summary.flatPerImage) * n + requestFee };
   }
-  if (Number.isFinite(Number(summary.minimumPerImage))) {
+  if (summary.minimumPerImage !== null && summary.minimumPerImage !== undefined && Number.isFinite(Number(summary.minimumPerImage))) {
     return { exact: false, total: Number(summary.minimumPerImage) * n + requestFee };
   }
   return null;
