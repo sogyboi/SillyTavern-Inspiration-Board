@@ -21,6 +21,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - name: Repair v0.6.0 patcher inputs
+        run: python tools/prepare_v060_patcher.py
       - name: Apply v0.6.0 product wiring
         run: python tools/apply_v060_fixed.py
       - name: Verify full repository
