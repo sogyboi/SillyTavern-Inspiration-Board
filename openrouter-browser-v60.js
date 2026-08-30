@@ -46,12 +46,21 @@ function moderationKind(model) {
   return 'unknown';
 }
 
-function cleanBadge(label) {
-  return String(label || '').replace(/\s+·\s+(?:Unmoderated|Moderated|Moderation unknown)$/i, '');
+function explicitlyUncensored(model, value = '') {
+  const text = `${value} ${model?.id || ''} ${model?.name || ''}`.toLowerCase();
+  return /(?:^|[^a-z])(uncensored|nsfw)(?:[^a-z]|$)/i.test(text) || text.includes('lustify');
+}
+
+function stripBrowserBadge(label) {
+  let value = String(label || '');
+  const pattern = /\s+·\s+(?:🔓\s*)?(?:Uncensored\/NSFW|Unmoderated|Moderated|Moderation unknown)$/i;
+  while (pattern.test(value)) value = value.replace(pattern, '');
+  return value;
 }
 
 function optionLabel(entry) {
-  const base = cleanBadge(entry.label);
+  const base = stripBrowserBadge(entry.baseLabel || entry.option?.textContent || entry.value);
+  if (explicitlyUncensored(entry.meta, entry.value)) return `${base} · 🔓 Uncensored/NSFW`;
   const moderation = moderationKind(entry.meta);
   if (moderation === 'unmoderated') return `${base} · Unmoderated`;
   if (moderation === 'moderated') return `${base} · Moderated`;
@@ -69,7 +78,7 @@ function enhanceModal(modal) {
 
   const providerTabs = document.createElement('div');
   providerTabs.className = 'ib60-provider-tabs wide';
-  providerTabs.innerHTML = '<button type="button" class="active">OpenRouter</button><button type="button" data-ib60-open-venice>Venice · Image + Video</button>';
+  providerTabs.innerHTML = '<button type="button" class="active">OpenRouter · Images</button><button type="button" data-ib60-open-venice>Venice · Image + Video</button>';
   grid.prepend(providerTabs);
   providerTabs.querySelector('[data-ib60-open-venice]').onclick = () => {
     localStorage.setItem(PROVIDER_KEY, 'venice');
@@ -101,86 +110,107 @@ function enhanceModal(modal) {
       <option value="refs">Reference-capable only</option>
       <option value="none">No-reference models</option>
     </select>
-    <select data-ib60-or-moderation aria-label="Filter moderation">
-      <option value="all">All moderation</option>
-      <option value="unmoderated">Unmoderated endpoints</option>
-      <option value="moderated">Moderated endpoints</option>
+    <select data-ib60-or-safety aria-label="Filter model safety/moderation">
+      <option value="all">All safety / moderation</option>
+      <option value="explicit">Explicit Uncensored / NSFW labels</option>
+      <option value="unmoderated">Unmoderated top route</option>
+      <option value="moderated">Moderated top route</option>
       <option value="unknown">Unknown moderation</option>
     </select>`;
   label?.before(tools);
 
   const disclaimer = document.createElement('div');
   disclaimer.className = 'ib60-or-disclaimer wide';
-  disclaimer.textContent = 'OpenRouter moderation labels use its live top_provider.is_moderated metadata. “Unmoderated” means OpenRouter reports moderation off for the top route; it is not a guarantee that every fallback/provider accepts every NSFW prompt.';
+  disclaimer.textContent = 'OpenRouter safety labels use live model names plus top_provider.is_moderated. “Unmoderated” means the top OpenRouter route reports moderation off; it is not a guarantee that every fallback/provider accepts every NSFW prompt.';
   tools.after(disclaimer);
 
   const search = tools.querySelector('[data-ib60-or-search]');
   const sort = tools.querySelector('[data-ib60-or-sort]');
   const refs = tools.querySelector('[data-ib60-or-refs]');
-  const moderation = tools.querySelector('[data-ib60-or-moderation]');
+  const safety = tools.querySelector('[data-ib60-or-safety]');
   const count = modal.querySelector('[data-ib60-or-count]');
-  let entries = [];
+  const entries = new Map();
   let metadata = new Map();
-  let rebuilding = false;
+  let originalCounter = 0;
 
   const syncOptions = () => {
-    if (rebuilding) return;
-    const previous = new Map(entries.map(entry => [entry.value, entry]));
-    for (const option of select.options) {
+    for (const option of [...select.options]) {
       const value = option.value;
-      const old = previous.get(value);
-      const currentLabel = cleanBadge(option.textContent || value);
-      if (old) old.label = currentLabel;
-      else entries.push({ value, label: currentLabel, originalIndex: entries.length, meta: metadata.get(value) || null });
+      let entry = entries.get(value);
+      const current = stripBrowserBadge(option.textContent || value);
+      if (!entry) {
+        entry = { value, option, baseLabel: current, originalIndex: originalCounter++, meta: metadata.get(value) || null };
+        entries.set(value, entry);
+      } else {
+        entry.option = option;
+        entry.meta = metadata.get(value) || entry.meta || null;
+        // OpenRouter's v0.5.8 pricing loader updates option text asynchronously.
+        // Capture those updates while stripping only badges added by this module.
+        if (current && current !== stripBrowserBadge(optionLabel(entry))) entry.baseLabel = current;
+      }
     }
+  };
+
+  const matchesSafety = entry => {
+    const filter = safety.value;
+    if (filter === 'all') return true;
+    if (filter === 'explicit') return explicitlyUncensored(entry.meta, entry.value);
+    return moderationKind(entry.meta) === filter;
   };
 
   const apply = () => {
     syncOptions();
     const query = search.value.trim().toLowerCase();
-    const refFilter = refs.value;
-    const moderationFilter = moderation.value;
     const selected = select.value;
-    let rows = entries.map(entry => ({ ...entry, meta: metadata.get(entry.value) || entry.meta || null }));
-    rows = rows.filter(entry => {
-      const text = `${entry.label} ${entry.value} ${entry.meta?.description || ''}`.toLowerCase();
-      const matchesQuery = !query || text.includes(query);
-      const ref = referenceKind(entry.label);
-      const matchesRef = refFilter === 'all' || ref === refFilter || entry.value === selected;
-      const mod = moderationKind(entry.meta);
-      const matchesModeration = moderationFilter === 'all' || mod === moderationFilter || entry.value === selected;
-      return matchesQuery && matchesRef && matchesModeration;
-    });
+    const rows = [...entries.values()].filter(entry => entry.option?.isConnected || [...select.options].includes(entry.option));
+
+    for (const entry of rows) {
+      entry.meta = metadata.get(entry.value) || entry.meta || null;
+      const ref = referenceKind(entry.baseLabel);
+      const searchable = `${entry.baseLabel} ${entry.value} ${entry.meta?.name || ''} ${entry.meta?.description || ''}`.toLowerCase();
+      const visible = entry.value === selected
+        || ((!query || searchable.includes(query))
+          && (refs.value === 'all' || ref === refs.value)
+          && matchesSafety(entry));
+      entry.option.hidden = !visible;
+      entry.option.disabled = !visible;
+      entry.option.style.display = visible ? '' : 'none';
+      entry.option.textContent = optionLabel(entry);
+    }
+
     const mode = sort.value;
-    rows.sort((a, b) => {
-      if (a.value === selected) return -1;
-      if (b.value === selected) return 1;
-      if (mode === 'name') return a.label.localeCompare(b.label);
-      if (mode === 'newest') return Number(b.meta?.created || 0) - Number(a.meta?.created || 0);
-      if (mode === 'price-asc') return parsePrice(a.label) - parsePrice(b.label) || a.label.localeCompare(b.label);
-      if (mode === 'price-desc') return parsePrice(b.label) - parsePrice(a.label) || a.label.localeCompare(b.label);
+    const ordered = [...rows].sort((a, b) => {
+      if (mode === 'name') return a.baseLabel.localeCompare(b.baseLabel);
+      if (mode === 'newest') return Number(b.meta?.created || 0) - Number(a.meta?.created || 0) || a.baseLabel.localeCompare(b.baseLabel);
+      if (mode === 'price-asc') return parsePrice(a.baseLabel) - parsePrice(b.baseLabel) || a.baseLabel.localeCompare(b.baseLabel);
+      if (mode === 'price-desc') return parsePrice(b.baseLabel) - parsePrice(a.baseLabel) || a.baseLabel.localeCompare(b.baseLabel);
       return a.originalIndex - b.originalIndex;
     });
-    rebuilding = true;
-    select.innerHTML = rows.map(entry => `<option value="${entry.value.replace(/"/g, '&quot;')}" ${entry.value === selected ? 'selected' : ''}>${optionLabel(entry)}</option>`).join('');
-    rebuilding = false;
-    if (count) count.textContent = `${rows.length} shown / ${entries.length}`;
+    const fragment = document.createDocumentFragment();
+    ordered.forEach(entry => fragment.appendChild(entry.option));
+    select.appendChild(fragment);
+    if (selected && [...select.options].some(option => option.value === selected)) select.value = selected;
+    const shown = ordered.filter(entry => !entry.option.hidden).length;
+    if (count) count.textContent = `${shown} shown / ${ordered.length}`;
   };
 
-  const selectObserver = new MutationObserver(() => {
-    if (rebuilding) return;
-    syncOptions();
-    apply();
-  });
-  selectObserver.observe(select, { childList: true, subtree: true, characterData: true });
-  modal.addEventListener('remove', () => selectObserver.disconnect(), { once: true });
-
-  [search, sort, refs, moderation].forEach(control => control.addEventListener(control === search ? 'input' : 'change', apply));
+  [search, sort, refs, safety].forEach(control => control.addEventListener(control === search ? 'input' : 'change', apply));
   syncOptions();
   apply();
+
+  // Keep all real option nodes in the select so the existing v0.5.8 pricing loader can
+  // continue updating them. A small poll captures those text updates without a MutationObserver loop.
+  const refreshTimer = setInterval(() => {
+    if (!modal.isConnected) {
+      clearInterval(refreshTimer);
+      return;
+    }
+    apply();
+  }, 450);
+
   void getMetadata().then(map => {
     metadata = map;
-    entries.forEach(entry => { entry.meta = metadata.get(entry.value) || null; });
+    for (const entry of entries.values()) entry.meta = metadata.get(entry.value) || null;
     apply();
   });
 }
