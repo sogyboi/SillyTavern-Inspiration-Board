@@ -24,9 +24,10 @@ export function requestedReferenceIds(g, s) {
     return ids;
 }
 export function referenceSetSnapshot(s, name, gallery) {
-    const identityIds = uniqueIds(s.identityIds, 50);
-    const temporaryIds = uniqueIds(s.selectedIds, 50).filter(id => !identityIds.includes(id));
-    if (!identityIds.length && !temporaryIds.length && s.referenceMode === 'auto' && gallery.mainImageId) identityIds.push(gallery.mainImageId);
+    const activeIds = requestedReferenceIds(gallery, s);
+    const identityIds = uniqueIds(s.identityIds, 50).filter(id => activeIds.includes(id));
+    const temporaryIds = uniqueIds(s.selectedIds, 50).filter(id => activeIds.includes(id) && !identityIds.includes(id));
+    for (const id of activeIds) if (!identityIds.includes(id) && !temporaryIds.includes(id)) identityIds.push(id);
     const ids = [...identityIds, ...temporaryIds];
     return { name: text(name, 80).trim(), guidance: text(s.referenceGuidance, 2000), identityIds, temporaryIds, baseId: ids.includes(s.referenceBaseId) ? s.referenceBaseId : ids[0] || '' };
 }

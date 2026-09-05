@@ -49,6 +49,8 @@ with sync_playwright() as w:
  page.locator('[data-close]').click();page.evaluate('mockContext.characterId=1');page.locator('#cgs-floating').click();expect(page.locator('.cgs-card')).to_have_count(0)
  page.locator('[data-tab="connections"]').click();page.locator('[data-relink]').click();expect(page.locator('[data-link-preview]')).to_contain_text('6 live images');page.locator('[data-link-confirm]').click();expect(page.locator('.cgs-manager')).to_have_count(0)
  page.locator('[data-tab="gallery"]').click();expect(page.locator('.cgs-card')).to_have_count(6)
+ page.locator('[data-view]').first.scroll_into_view_if_needed()
+ page.wait_for_function('Array.from(document.querySelectorAll("[data-grid] img")).slice(0,2).every(i=>i.complete && i.naturalWidth>0)')
  page.screenshot(path='/tmp/cgs-ui-artifacts/cgs-fold-gallery.png')
  # Narrow touch viewport: bottom generator remains usable and no horizontal page overflow.
  page.set_viewport_size({'width':360,'height':740});page.locator('[data-tab="generate"]').click();expect(page.locator('[data-model]')).to_have_count(2)
