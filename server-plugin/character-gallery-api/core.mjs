@@ -1,4 +1,4 @@
-export const VERSION = '0.1.0';
+export const VERSION = '0.1.1';
 export const ROLES = ['general', 'face', 'hair', 'body', 'outfit', 'pose', 'style', 'scene'];
 export const DEFAULT_SETTINGS = Object.freeze({ provider: 'openrouter', referenceMode: 'auto', selectedIds: [], prompt: '', negativePrompt: '', safeMode: true, providers: { openrouter: { model: '', aspect: '', resolution: '', quality: '', format: '', count: 1, seed: '' }, venice: { model: '', aspect: '', resolution: '', quality: '', format: 'webp', count: 1, seed: '' } } });
 const validationError = message => Object.assign(new Error(message), { status: 400 });
@@ -6,7 +6,8 @@ export const copy = value => JSON.parse(JSON.stringify(value));
 export function settingsWithDefaults(input = {}) {
     const result = { ...copy(DEFAULT_SETTINGS), ...input };
     result.provider = ['openrouter', 'venice'].includes(result.provider) ? result.provider : 'openrouter';
-    result.referenceMode = ['auto', 'main', 'selected', 'none'].includes(result.referenceMode) ? result.referenceMode : 'auto';
+    result.referenceMode = ['auto', 'main', 'selected', 'none'].includes(result.referenceMode) ? result.referenceMode : 'openrouter';
+    result.referenceMode = ['auto', 'main', 'selected', 'none'].includes(input.referenceMode) ? input.referenceMode : 'auto';
     result.selectedIds = Array.isArray(input.selectedIds) ? [...new Set(input.selectedIds.filter(x => typeof x === 'string'))].slice(0, 50) : [];
     result.prompt = String(input.prompt || '').slice(0, 32000);
     result.negativePrompt = String(input.negativePrompt || '').slice(0, 2000);
