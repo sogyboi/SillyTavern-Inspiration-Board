@@ -23,22 +23,45 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Apply checksummed locally tested patch
+      - name: Apply checksummed patch and final touch corrections
         run: |
           python - <<'PY'
           from pathlib import Path
-          import base64, lzma, hashlib, subprocess
-          text = ''.join(Path(f'tools/.cgs-update-{i}.b64').read_text().strip() for i in (1,2))
-          data = lzma.decompress(base64.b64decode(text, validate=True))
-          assert hashlib.sha256(data).hexdigest() == '9f17832de1169928c1710073c2fe63a2e171ef8254f5dcf60bff8d74697d06ac', 'Patch checksum mismatch'
-          patch = Path('/tmp/cgs-update.patch'); patch.write_bytes(data)
-          subprocess.run(['git', 'apply', '--check', str(patch)], check=True)
-          subprocess.run(['git', 'apply', str(patch)], check=True)
+          import base64, lzma, hashlib, subprocess, json
+          if json.loads(Path('manifest.json').read_text())['version'] != '0.2.0':
+              text = ''.join(Path(f'tools/.cgs-update-{i}.b64').read_text().strip() for i in (1,2))
+              data = lzma.decompress(base64.b64decode(text, validate=True))
+              assert hashlib.sha256(data).hexdigest() == '9f17832de1169928c1710073c2fe63a2e171ef8254f5dcf60bff8d74697d06ac'
+              patch = Path('/tmp/cgs-update.patch'); patch.write_bytes(data)
+              subprocess.run(['git', 'apply', '--check', str(patch)], check=True)
+              subprocess.run(['git', 'apply', str(patch)], check=True)
+          p = Path('server-plugin/character-gallery-api/collections.mjs')
+          s = p.read_text()
+          old = "    const identityIds = uniqueIds(s.identityIds, 50);\n    const temporaryIds = uniqueIds(s.selectedIds, 50).filter(id => !identityIds.includes(id));\n    if (!identityIds.length && !temporaryIds.length && s.referenceMode === 'auto' && gallery.mainImageId) identityIds.push(gallery.mainImageId);"
+          new = "    const activeIds = requestedReferenceIds(gallery, s);\n    const identityIds = uniqueIds(s.identityIds, 50).filter(id => activeIds.includes(id));\n    const temporaryIds = uniqueIds(s.selectedIds, 50).filter(id => activeIds.includes(id) && !identityIds.includes(id));\n    for (const id of activeIds) if (!identityIds.includes(id) && !temporaryIds.includes(id)) identityIds.push(id);"
+          assert old in s or new in s
+          p.write_text(s.replace(old, new))
+          p = Path('style.css'); p.write_text(p.read_text().replace('.cgs-ref-tile>div button{font-size:10px;padding:4px;min-width:0;min-height:44px;}', '.cgs-ref-tile>div button{font-size:10px;padding:4px;min-width:0;min-height:44px;height:44px;}'))
+          Path('tests/cgs-ref-modes.test.mjs').write_text('''import test from 'node:test';
+          import assert from 'node:assert/strict';
+          import { referenceSetSnapshot } from '../server-plugin/character-gallery-api/collections.mjs';
+          import { settingsWithDefaults } from '../server-plugin/character-gallery-api/core.mjs';
+          test('saved reference sets match Main-only and None modes rather than hidden selections', () => {
+              const gallery = { mainImageId: 'main' };
+              const settings = settingsWithDefaults({ referenceMode: 'main', selectedIds: ['other'], identityIds: ['identity'] });
+              const main = referenceSetSnapshot(settings, 'Main only', gallery);
+              assert.deepEqual(main.identityIds, ['main']);
+              assert.deepEqual(main.temporaryIds, []);
+              assert.equal(main.baseId, 'main');
+              const none = referenceSetSnapshot({ ...settings, referenceMode: 'none' }, 'Empty', gallery);
+              assert.deepEqual(none.identityIds, []);
+              assert.deepEqual(none.temporaryIds, []);
+          });
+          ''')
           p = Path('tests/ui-smoke.py')
           s = p.read_text().replace("expect(page.locator('[data-model]')).to_have_count(1)", "expect(page.locator('[data-model]')).to_have_count(2)")
-          s = s.replace("expect(page.locator('.cgs-ref-tile')).to_have_count(2)\n page.locator('[data-ref-guidance]')", "page.locator('[data-model=\"test/ref\"]').click()\n expect(page.locator('.cgs-ref-tile')).to_have_count(2)\n page.locator('[data-ref-guidance]')", 1)
           s = s.replace("page.locator('.cgs-model-star')", "page.locator('[aria-label=\"Favorite test/ref\"]')")
-          s = s.replace("page.on('pageerror',lambda e:errors.append(str(e)))", "page.on('pageerror',lambda e:(print('BROWSER ERROR:',e,flush=True),errors.append(str(e))))")
+          s = s.replace(" page.screenshot(path='/tmp/cgs-ui-artifacts/cgs-fold-gallery.png')", " page.locator('[data-view]').first.scroll_into_view_if_needed()\n page.wait_for_function('Array.from(document.querySelectorAll(\"[data-grid] img\")).slice(0,2).every(i=>i.complete && i.naturalWidth>0)')\n page.screenshot(path='/tmp/cgs-ui-artifacts/cgs-fold-gallery.png')")
           p.write_text(s)
           PY
       - name: Verify storage, recovery, references and original-image transport
@@ -69,5 +92,5 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add CHANGELOG.md README.md index.js library-ui.js manifest.json package.json server-plugin style.css tests tools/check.mjs
-          git commit -m 'Character Gallery Studio 0.2.0: reference sets, collections, Fold UI and recovery'
+          git commit -m 'Polish reference controls and verify saved sets for Main and None modes'
           git push origin HEAD:cgs-v020-collections
