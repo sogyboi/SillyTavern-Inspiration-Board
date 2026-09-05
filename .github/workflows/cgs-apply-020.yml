@@ -34,6 +34,12 @@ jobs:
           patch = Path('/tmp/cgs-update.patch'); patch.write_bytes(data)
           subprocess.run(['git', 'apply', '--check', str(patch)], check=True)
           subprocess.run(['git', 'apply', str(patch)], check=True)
+          p = Path('tests/ui-smoke.py')
+          s = p.read_text().replace("expect(page.locator('[data-model]')).to_have_count(1)", "expect(page.locator('[data-model]')).to_have_count(2)")
+          s = s.replace("expect(page.locator('.cgs-ref-tile')).to_have_count(2)\n page.locator('[data-ref-guidance]')", "page.locator('[data-model=\"test/ref\"]').click()\n expect(page.locator('.cgs-ref-tile')).to_have_count(2)\n page.locator('[data-ref-guidance]')", 1)
+          s = s.replace("page.locator('.cgs-model-star')", "page.locator('[aria-label=\"Favorite test/ref\"]')")
+          s = s.replace("page.on('pageerror',lambda e:errors.append(str(e)))", "page.on('pageerror',lambda e:(print('BROWSER ERROR:',e,flush=True),errors.append(str(e))))")
+          p.write_text(s)
           PY
       - name: Verify storage, recovery, references and original-image transport
         run: |
