@@ -1,0 +1,67 @@
+name: Apply Character Gallery 0.2.0
+on:
+  push:
+    branches: [cgs-v020-collections]
+    paths:
+      - '.github/workflows/cgs-apply-020.yml'
+      - 'tools/.cgs-update-*.b64'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cgs-v020-collections
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply checksummed locally tested patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import base64, lzma, hashlib, subprocess
+          text = ''.join(Path(f'tools/.cgs-update-{i}.b64').read_text().strip() for i in (1,2))
+          data = lzma.decompress(base64.b64decode(text, validate=True))
+          assert hashlib.sha256(data).hexdigest() == '9f17832de1169928c1710073c2fe63a2e171ef8254f5dcf60bff8d74697d06ac', 'Patch checksum mismatch'
+          patch = Path('/tmp/cgs-update.patch'); patch.write_bytes(data)
+          subprocess.run(['git', 'apply', '--check', str(patch)], check=True)
+          subprocess.run(['git', 'apply', str(patch)], check=True)
+          PY
+      - name: Verify storage, recovery, references and original-image transport
+        run: |
+          npm test
+          npm run check
+          bash -n tools/install-plugin.sh
+          bash -n tools/install-termux.sh
+      - name: Install browser test dependencies
+        run: |
+          python -m pip install playwright Pillow
+          python -m playwright install --with-deps chromium
+      - name: Exercise Fold and narrow-phone workflows using a simulated provider
+        run: |
+          node tests/mock-host.mjs > /tmp/cgs-ui-host.log 2>&1 &
+          sleep 2
+          python tests/ui-smoke.py
+      - name: Upload browser verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cgs-v020-browser-verification
+          path: |
+            /tmp/cgs-ui-artifacts/
+            /tmp/cgs-ui-host.log
+      - name: Commit verified product files to the staging branch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add CHANGELOG.md README.md index.js library-ui.js manifest.json package.json server-plugin style.css tests tools/check.mjs
+          git commit -m 'Character Gallery Studio 0.2.0: reference sets, collections, Fold UI and recovery'
+          git push origin HEAD:cgs-v020-collections
