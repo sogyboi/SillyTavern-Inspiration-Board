@@ -15,9 +15,13 @@ jobs:
           node-version: '22'
       - run: npm test
       - run: npm run check
+      - name: Check installers
+        run: |
+          bash -n tools/install-plugin.sh
+          bash -n tools/install-termux.sh
       - name: Package installable extension
-        run: zip -r Character-Gallery-Studio-v0.1.0.zip manifest.json index.js style.css README.md LICENSE CHANGELOG.md package.json server-plugin tools tests
+        run: zip -r Character-Gallery-Studio-v0.1.1.zip manifest.json index.js style.css README.md LICENSE CHANGELOG.md package.json server-plugin tools tests
       - uses: actions/upload-artifact@v4
         with:
-          name: Character-Gallery-Studio-v0.1.0
-          path: Character-Gallery-Studio-v0.1.0.zip
+          name: Character-Gallery-Studio-v0.1.1
+          path: Character-Gallery-Studio-v0.1.1.zip
