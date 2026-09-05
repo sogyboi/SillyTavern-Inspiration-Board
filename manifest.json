@@ -1,14 +1,14 @@
 {
-  "display_name": "Inspiration Board",
-  "loading_order": 20,
+  "display_name": "Character Gallery Studio",
+  "loading_order": 30,
   "requires": [],
   "optional": [],
   "dependencies": [],
-  "js": "launcher-v61.js",
-  "css": "style-v2.css",
+  "js": "character-gallery/index.js",
+  "css": "character-gallery/style.css",
   "author": "sogyboi",
-  "version": "0.6.1",
-  "homePage": "https://github.com/sogyboi/SillyTavern-Inspiration-Board",
+  "version": "0.1.0",
+  "homePage": "https://github.com/sogyboi/SillyTavern-Inspiration-Board/tree/feature/character-gallery-studio",
   "auto_update": true,
   "minimum_client_version": "1.12.0"
 }
