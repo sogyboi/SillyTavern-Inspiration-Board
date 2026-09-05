@@ -2,7 +2,13 @@
 
 A separate SillyTavern extension for each character's images and reference-guided generation. Built from the provider-routing lessons in Inspiration Board, without depending on its canvas or changing its data.
 
-**Release: 0.2.0.** This extension is published on the `character-gallery-studio` branch of the public `sogyboi/SillyTavern-Inspiration-Board` repository. The repository's `main` branch remains Inspiration Board. Install this branch into its **own folder**, not over an existing Inspiration Board installation.
+**Release: 0.2.1.** This extension is published on the `character-gallery-studio` branch of the public `sogyboi/SillyTavern-Inspiration-Board` repository. The repository's `main` branch remains Inspiration Board. Install this branch into its **own folder**, not over an existing Inspiration Board installation.
+
+## New in 0.2.1: complete Venice model viewer
+
+Venice now loads its full live `type=all` catalog into the model viewer instead of requesting only generation and edit models. Every model Venice returns remains searchable and can be filtered by its real API type (image, inpaint/edit, upscale, video, text, TTS, ASR, music, or embedding). Image-generation and edit models remain selectable for paid image requests. Other Venice types are clearly marked **View only** and are blocked from the image endpoint, so catalog completeness cannot accidentally send a video/text/upscale model to the wrong API.
+
+The viewer keeps price/policy metadata where Venice exposes it, includes type names in search, and never hard-codes a Venice model list, so newly added Venice models appear after the normal catalog cache refresh.
 
 ## New in 0.2.0: organized galleries
 
@@ -30,7 +36,7 @@ Run the Git-free installer below again. It updates **both** the extension and `c
 - Separate server-side storage for each SillyTavern user and character avatar filename. Characters with the same display name do not share images.
 - Upload multiple originals, drag files in from desktop, or import the character's avatar. Images are never uploaded to GitHub.
 - Main reference, ordered selected references, favorites, names, notes, tags, and face/hair/body/outfit/pose/style/scene roles.
-- Separate OpenRouter and Venice catalogs. Search, price-per-image sorting, reference-only filtering, and provider-policy labels.
+- Separate OpenRouter and Venice catalogs. Venice displays the full live catalog with model-type filtering; non-image types remain visible as view-only. Search, image-price sorting, reference-only filtering, and provider-policy labels remain available.
 - Sends actual stored originals, not thumbnails. Missing/unsupported/excess references stop the request rather than silently becoming prompt-only generation.
 - Per-character prompts, models and generation settings persist on the server.
 - Jobs are bound to the original character. Leaving the menu or switching chats does not redirect outputs to another gallery.

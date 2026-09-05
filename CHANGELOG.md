@@ -1,3 +1,11 @@
+## 0.2.1 — Complete Venice model catalog
+
+- Venice model discovery now requests the official full `type=all` live catalog rather than only `image` and `inpaint`.
+- The model viewer shows the actual Venice API type and can filter image, edit/inpaint, upscale, video, text, music, TTS, ASR and embedding models.
+- Non-image Venice models remain visible for discovery but are explicitly view-only and validation blocks them from Character Gallery's paid image endpoints.
+- Newly added Venice models no longer require extension code changes; the normal live catalog cache refresh picks them up.
+- Requires extension and `character-gallery-api` 0.2.1; rerun the existing Git-free installer and fully restart SillyTavern.
+
 ## 0.2.0 — Reference sets, collections and recovery
 
 - Added named reference sets with identity/temporary layers, explicit first/base image, ordering and optional reference guidance.

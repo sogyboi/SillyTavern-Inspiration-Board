@@ -1,5 +1,5 @@
 import { uniqueIds, requestedReferenceIds } from './collections.mjs';
-export const VERSION = '0.2.0';
+export const VERSION = '0.2.1';
 export const ROLES = ['general', 'face', 'hair', 'body', 'outfit', 'pose', 'style', 'scene'];
 export const DEFAULT_SETTINGS = Object.freeze({ provider: 'openrouter', referenceMode: 'auto', selectedIds: [], identityIds: [], referenceBaseId: '', referenceGuidance: '', activeReferenceSetId: '', favoriteModels: { openrouter: [], venice: [] }, prompt: '', negativePrompt: '', safeMode: true, providers: { openrouter: { model: '', aspect: '', resolution: '', quality: '', format: '', count: 1, seed: '' }, venice: { model: '', aspect: '', resolution: '', quality: '', format: 'webp', count: 1, seed: '' } } });
 const validationError = message => Object.assign(new Error(message), { status: 400 });
@@ -42,6 +42,7 @@ export function referenceImages(gallery, settings) {
 }
 export function validateRequest(model, settings, refs) {
     if (!model) throw validationError('Choose an available model.');
+    if (model.usable === false) throw validationError(model.usableReason || 'This catalog model is not available in Character Gallery Studio image generation.');
     if (!settings.prompt.trim()) throw validationError('Write a prompt first.');
     if (['selected', 'auto'].includes(settings.referenceMode)) {
         const expected = new Set([...(settings.identityIds || []), ...(settings.selectedIds || [])]);

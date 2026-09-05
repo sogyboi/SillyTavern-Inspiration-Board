@@ -112,11 +112,16 @@ export function createGalleryApi({ secretStore, fetchImpl = globalThis.fetch }) 
         if (!refresh && cached && Date.now() - cached.at < 600000) return cached.promise;
         const promise = (async () => {
             if (provider === 'venice') {
-                const [gen, editModels, traits] = await Promise.all([
-                    request(provider, key, '/models?type=image').then(payload), request(provider, key, '/models?type=inpaint').then(payload),
+                const [all, traits] = await Promise.all([
+                    request(provider, key, '/models?type=all').then(payload),
                     request(provider, key, '/models/traits?type=image').then(payload).catch(() => ({})),
                 ]);
-                return [...(gen.data || []).map(m => normalizeVenice({ ...m, type: 'image' }, traits.data || {})), ...(editModels.data || []).map(m => normalizeVenice({ ...m, type: 'inpaint' }, traits.data || {}))];
+                const seen = new Set();
+                return (Array.isArray(all.data) ? all.data : []).filter(model => {
+                    const id = String(model?.id || '');
+                    if (!id || seen.has(id)) return false;
+                    seen.add(id); return true;
+                }).map(model => normalizeVenice(model, traits.data || {}));
             }
             const [images, chat] = await Promise.all([
                 request(provider, key, '/images/models').then(payload), request(provider, key, '/models?output_modalities=image').then(payload).catch(() => ({})),

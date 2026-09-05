@@ -19,8 +19,19 @@ export function fakeProvider() {
             return json({ data: [{ id: 'test/ref', top_provider: { is_moderated: false } }] });
         }
         if (u.pathname.endsWith('/traits')) return json({ data: {} });
-        if (u.searchParams.get('type') === 'inpaint') return json({ data: [{ id: 'test-edit', model_spec: { name: 'Test Edit', capabilities: { maxInputImages: 3 }, pricing: { inpaint: { usd: .05 } } } }] });
-        return json({ data: [{ id: 'test-image', model_spec: { name: 'Test Image', pricing: { generation: { usd: .01 } } } }] });
+        if (u.searchParams.get('type') === 'all') return json({ data: [
+            { id: 'test-image', type: 'image', model_spec: { name: 'Test Image', pricing: { generation: { usd: .01 } } } },
+            { id: 'test-edit', type: 'inpaint', model_spec: { name: 'Test Edit', capabilities: { maxInputImages: 3 }, pricing: { inpaint: { usd: .05 } } } },
+            { id: 'test-upscale', type: 'upscale', model_spec: { name: 'Test Upscale', pricing: { upscale: { usd: .02 } } } },
+            { id: 'test-video', type: 'video', model_spec: { name: 'Test Video' } },
+            { id: 'test-text', type: 'text', model_spec: { name: 'Test Text' } },
+            { id: 'test-tts', type: 'tts', model_spec: { name: 'Test TTS' } },
+            { id: 'test-asr', type: 'asr', model_spec: { name: 'Test ASR' } },
+            { id: 'test-music', type: 'music', model_spec: { name: 'Test Music' } },
+            { id: 'test-embedding', type: 'embedding', model_spec: { name: 'Test Embedding' } },
+        ] });
+        if (u.searchParams.get('type') === 'inpaint') return json({ data: [{ id: 'test-edit', type: 'inpaint', model_spec: { name: 'Test Edit', capabilities: { maxInputImages: 3 }, pricing: { inpaint: { usd: .05 } } } }] });
+        return json({ data: [{ id: 'test-image', type: 'image', model_spec: { name: 'Test Image', pricing: { generation: { usd: .01 } } } }] });
     };
     return state;
 }

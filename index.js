@@ -60,7 +60,7 @@ class GalleryPanel {
         this.character = character; this.gallery = null; this.settings = settingsWithDefaults(); this.models = [];
         this.tab = 'gallery'; this.closed = false; this.busy = false; this.uploading = false; this.limit = 48;
         this.saveTail = Promise.resolve(); this.catalogEpoch = 0; this.gallerySignature = ''; this.status = {};
-        this.filters = { search: '', sort: 'name', safety: 'all', referenceOnly: false };
+        this.filters = { search: '', sort: 'name', safety: 'all', referenceOnly: false, type: 'all' };
     }
     q(selector) { return this.dialog.querySelector(selector); }
     async open() {
@@ -80,8 +80,8 @@ class GalleryPanel {
         </section>
         <section data-page="generate" hidden>
           <div class="cgs-provider-tabs"><button type="button" data-provider="openrouter">OpenRouter</button><button type="button" data-provider="venice">Venice</button></div>
-          <div class="cgs-filter-row"><input data-model-search type="search" placeholder="Search image models…" aria-label="Search models"><select data-model-sort aria-label="Sort models"><option value="name">Name</option><option value="price">Price / image · low first</option><option value="newest">Newest</option></select></div>
-          <div class="cgs-filter-row"><label class="cgs-check"><input type="checkbox" data-ref-only> Reference-capable only</label><select data-safety-filter aria-label="Model policy filter"><option value="all">All model policies</option><option value="uncensored">Advertised uncensored / NSFW</option><option value="unmoderated">Unmoderated (OpenRouter)</option></select></div>
+          <div class="cgs-filter-row"><input data-model-search type="search" placeholder="Search provider models…" aria-label="Search models"><select data-model-sort aria-label="Sort models"><option value="name">Name</option><option value="price">Price / image · low first</option><option value="newest">Newest</option></select></div>
+          <div class="cgs-filter-row"><select data-model-type aria-label="Model type"><option value="all">All model types</option><option value="image">Image generation</option><option value="inpaint">Image edit / references</option><option value="upscale">Upscale</option><option value="video">Video</option><option value="text">Text</option><option value="music">Music</option><option value="tts">Text to speech</option><option value="asr">Speech to text</option><option value="embedding">Embedding</option></select><label class="cgs-check"><input type="checkbox" data-ref-only> Reference-capable only</label><select data-safety-filter aria-label="Model policy filter"><option value="all">All model policies</option><option value="uncensored">Advertised uncensored / NSFW</option><option value="unmoderated">Unmoderated (OpenRouter)</option></select></div>
           <div class="cgs-models" data-models role="listbox" aria-label="Image models"><p>Select Generate to load the live catalog.</p></div>
           <div class="cgs-model-info" data-model-info></div>
           <div class="cgs-gen-options" data-params></div>
@@ -107,7 +107,7 @@ class GalleryPanel {
         dialog.oncancel = e => { e.preventDefault(); void this.close(); };
         bind(dialog, '[data-close]', () => void this.close());
         dialog.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => this.showTab(b.dataset.tab));
-        dialog.querySelectorAll('[data-provider]').forEach(b => b.onclick = () => { this.settings.provider = b.dataset.provider; this.settingsChanged(); this.updateProviderButtons(); void this.loadModels(); });
+        dialog.querySelectorAll('[data-provider]').forEach(b => b.onclick = () => { this.settings.provider = b.dataset.provider; this.filters.type = 'all'; const type = this.q('[data-model-type]'); if (type) type.value = 'all'; this.settingsChanged(); this.updateProviderButtons(); void this.loadModels(); });
         bind(dialog, '[data-upload]', () => this.q('[data-files]').click());
         this.q('[data-files]').onchange = e => { const files = [...e.target.files]; e.target.value = ''; void this.upload(files); };
         bind(dialog, '[data-avatar]', () => void this.importAvatar());
@@ -121,6 +121,7 @@ class GalleryPanel {
         bind(dialog, '[data-pick-refs]', () => this.showTab('gallery'));
         this.q('[data-model-search]').oninput = e => { this.filters.search = e.target.value; this.renderModelList(); };
         this.q('[data-model-sort]').onchange = e => { this.filters.sort = e.target.value; this.renderModelList(); };
+        this.q('[data-model-type]').onchange = e => { this.filters.type = e.target.value; this.renderModelList(); };
         this.q('[data-safety-filter]').onchange = e => { this.filters.safety = e.target.value; this.renderModelList(); };
         this.q('[data-ref-only]').onchange = e => { this.filters.referenceOnly = e.target.checked; this.renderModelList(); };
         this.q('[data-ref-mode]').onchange = e => { this.settings.referenceMode = e.target.value; this.settingsChanged(); this.renderRefs(); };
@@ -267,22 +268,33 @@ class GalleryPanel {
             const data = await api(`/models/${provider}`);
             if (this.closed || epoch !== this.catalogEpoch) return;
             this.models = data.models || []; this.loadedProvider = provider;
-            if (!this.settings.providers[provider].model && this.models.length) { this.settings.providers[provider].model = this.models[0].id; this.settingsChanged(); }
+            const saved = this.settings.providers[provider].model;
+            if (!this.models.some(m => m.id === saved)) { const first = this.models.find(m => m.usable !== false) || this.models[0]; if (first) { this.settings.providers[provider].model = first.id; this.settingsChanged(); } }
             this.renderModelList(); this.renderModel();
         } catch (e) { if (epoch === this.catalogEpoch && !this.closed) { this.models = []; this.q('[data-models]').textContent = e.message; this.notice(e.message, true); this.renderModel(); } }
     }
     renderModelList() {
         const selected = this.settings.providers[this.settings.provider].model, rows = this.library ? this.library.sortModels(filteredModels(this.models, this.filters)) : filteredModels(this.models, this.filters);
-        this.q('[data-models]').innerHTML = rows.length ? rows.map(m => `<button type="button" role="option" aria-selected="${m.id === selected}" data-model="${esc(m.id)}" class="cgs-model-option ${m.id === selected ? 'active' : ''}"><span><strong>${esc(m.name)}</strong><small>${m.refs.max ? `${m.refs.min ? 'Requires' : 'Supports'} refs · max ${m.refs.max}` : 'Prompt only'}${m.uncensored ? ' · Uncensored / NSFW' : ''}</small></span><b>${esc(priceLabel(m.price))}</b></button>`).join('') : '<p>No models match these filters. Your previous selection is kept.</p>';
+        const labels = { image: 'IMAGE', inpaint: 'EDIT / REF', upscale: 'UPSCALE', video: 'VIDEO', text: 'TEXT', music: 'MUSIC', tts: 'TTS', asr: 'ASR', embedding: 'EMBEDDING' };
+        this.q('[data-models]').innerHTML = rows.length ? rows.map(m => {
+            const usable = m.usable !== false, type = String(m.catalogType || m.kind || 'image').toLowerCase();
+            const capability = usable ? (m.refs.max ? `${m.refs.min ? 'Requires' : 'Supports'} refs · max ${m.refs.max}` : 'Prompt only') : `View only · ${labels[type] || type.toUpperCase()}`;
+            return `<button type="button" role="option" aria-selected="${m.id === selected}" aria-disabled="${!usable}" data-model="${esc(m.id)}" class="cgs-model-option ${m.id === selected ? 'active' : ''} ${!usable ? 'view-only' : ''}"><span><strong>${esc(m.name)}</strong><small><em class="cgs-model-type">${esc(labels[type] || type.toUpperCase())}</em> · ${esc(capability)}${m.uncensored ? ' · Uncensored / NSFW' : ''}</small></span><b>${esc(priceLabel(m.price))}</b></button>`;
+        }).join('') : '<p>No models match these filters. Your previous selection is kept.</p>';
         this.q('[data-models]').querySelectorAll('[data-model]').forEach(b => b.onclick = () => { this.settings.providers[this.settings.provider].model = b.dataset.model; this.settingsChanged(); this.renderModelList(); this.renderModel(); });
         this.library?.decorateModels();
     }
     renderModel() {
         const m = this.model(), s = this.settings.providers[this.settings.provider];
         if (!m) { this.q('[data-model-info]').textContent = 'Select a model from the live catalog.'; this.q('[data-params]').innerHTML = ''; this.renderRefs(); return; }
+        if (m.usable === false) {
+            const type = String(m.catalogType || m.kind || 'unknown').toUpperCase();
+            this.q('[data-model-info]').innerHTML = `<strong>${esc(m.name)}</strong><div class="cgs-badges"><span>${esc(type)}</span><span>View only</span><span>${esc(priceLabel(m.price))}</span></div><p>${esc(m.description)}</p><p class="cgs-warning">${esc(m.usableReason)}</p>`;
+            this.q('[data-params]').innerHTML = ''; this.q('[data-negative-wrap]').hidden = true; this.q('[data-safe-wrap]').hidden = true; this.renderRefs(); this.renderEstimate(); return;
+        }
         for (const [key, values] of [['aspect', m.params.aspects], ['resolution', m.params.resolutions], ['quality', m.params.qualities], ['format', m.params.formats]]) if (s[key] && !values.includes(s[key])) s[key] = '';
         s.count = Math.min(s.count, m.params.maxCount);
-        this.q('[data-model-info]').innerHTML = `<strong>${esc(m.name)}</strong><div class="cgs-badges"><span>${esc(priceLabel(m.price))}</span><span>${m.refs.max ? `Reference input · ${m.refs.min}–${m.refs.max}` : 'No reference input'}</span><span>${esc(m.moderation)}</span></div><p>${esc(m.description)}</p>${m.refs.style ? '<p class="cgs-warning">Style-reference model: copies visual style, not necessarily character identity.</p>' : ''}`;
+        this.q('[data-model-info]').innerHTML = `<strong>${esc(m.name)}</strong><div class="cgs-badges"><span>${esc(String(m.catalogType || m.kind || 'image').toUpperCase())}</span><span>${esc(priceLabel(m.price))}</span><span>${m.refs.max ? `Reference input · ${m.refs.min}–${m.refs.max}` : 'No reference input'}</span><span>${esc(m.moderation)}</span></div><p>${esc(m.description)}</p>${m.refs.style ? '<p class="cgs-warning">Style-reference model: copies visual style, not necessarily character identity.</p>' : ''}`;
         this.q('[data-params]').innerHTML = [['aspect', 'Aspect ratio', m.params.aspects], ['resolution', 'Resolution', m.params.resolutions], ['quality', 'Quality', m.params.qualities], ['format', 'Output format', m.params.formats]].filter(([, , values]) => values.length).map(([key, label, values]) => `<label>${label}<select data-param="${key}">${options(values, s[key])}</select></label>`).join('') + `<label>Image count<select data-param="count">${Array.from({ length: m.params.maxCount }, (_, i) => `<option ${s.count === i + 1 ? 'selected' : ''}>${i + 1}</option>`).join('')}</select></label>${m.params.seed ? `<label>Seed (optional)<input type="number" min="0" max="2147483647" data-param="seed" value="${esc(s.seed)}" placeholder="Random"></label>` : ''}`;
         this.q('[data-params]').querySelectorAll('[data-param]').forEach(el => el.onchange = () => { s[el.dataset.param] = el.dataset.param === 'count' ? Number(el.value) : el.value; this.settingsChanged(); this.renderEstimate(); });
         this.q('[data-negative-wrap]').hidden = !m.params.negative; this.q('[data-safe-wrap]').hidden = m.provider !== 'venice';
@@ -291,6 +303,7 @@ class GalleryPanel {
     }
     renderEstimate() {
         const m = this.model(); if (!m) return;
+        if (m.usable === false) { this.q('[data-estimate]').textContent = 'Catalog entry only · not available in Character Gallery image generation.'; return; }
         const count = this.settings.providers[m.provider].count;
         this.q('[data-estimate]').textContent = m.price?.unit === 'img' && m.price.min !== null ? `${m.price.exact ? 'Base estimate' : 'From'}: $${(m.price.min * count).toFixed(3)} / ${count} image(s)${m.price.extra ? ' + input charges' : ''}. Quality / resolution may change cost.` : `${priceLabel(m.price)} · no reliable flat total.`;
     }
@@ -322,7 +335,7 @@ class GalleryPanel {
     renderJobs() {
         if (!this.gallery || this.closed) return;
         const active = this.gallery.jobs.filter(j => ACTIVE.has(j.status)); this.q('[data-running]').textContent = active.length ? '• Running' : '';
-        const button = this.q('[data-generate]'); if (!this.busy) { button.disabled = active.length > 0; button.textContent = active.length ? 'Generation running…' : 'Generate image'; }
+        const button = this.q('[data-generate]'), unsupported = this.model()?.usable === false; if (!this.busy) { button.disabled = active.length > 0 || unsupported; button.textContent = active.length ? 'Generation running…' : unsupported ? 'View-only model' : 'Generate image'; }
         const jobs = this.gallery.jobs;
         const signature = JSON.stringify(jobs.map(j => [j.id, j.status, j.message]));
         if (signature === this.jobsSignature) return; this.jobsSignature = signature;
