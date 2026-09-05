@@ -6,7 +6,6 @@ export const copy = value => JSON.parse(JSON.stringify(value));
 export function settingsWithDefaults(input = {}) {
     const result = { ...copy(DEFAULT_SETTINGS), ...input };
     result.provider = ['openrouter', 'venice'].includes(result.provider) ? result.provider : 'openrouter';
-    result.referenceMode = ['auto', 'main', 'selected', 'none'].includes(result.referenceMode) ? result.referenceMode : 'openrouter';
     result.referenceMode = ['auto', 'main', 'selected', 'none'].includes(input.referenceMode) ? input.referenceMode : 'auto';
     result.selectedIds = Array.isArray(input.selectedIds) ? [...new Set(input.selectedIds.filter(x => typeof x === 'string'))].slice(0, 50) : [];
     result.prompt = String(input.prompt || '').slice(0, 32000);
