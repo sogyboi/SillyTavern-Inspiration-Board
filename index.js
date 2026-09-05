@@ -1,986 +1,413 @@
-import { ROLE_OPTIONS, clamp, duplicateItem, fitItems, makeBoard, makeImageItem, makeNoteItem, normalizeState, staggerPositions, uid } from './core.js';
-import { clearImages, deleteImage, getImage, getImageByHash, hashBlob, listImages, makeThumbnail, putImage } from './db.js';
+import { VERSION, ROLES, copy, settingsWithDefaults, characterFromContext, groupCharacters, referenceImages, validateRequest } from './server-plugin/character-gallery-api/core.mjs';
+import { filteredModels, priceLabel } from './server-plugin/character-gallery-api/models.mjs';
 
-const MODULE = 'inspiration_board';
-const STORAGE_KEY = 'st_inspiration_board_state_v1';
-const MAX_FILE_MB = 30;
-const imageUrlCache = new Map();
+const API = '/api/plugins/character-gallery-api';
+const ACTIVE = new Set(['queued', 'preparing', 'sending', 'saving']);
+const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const context = () => globalThis.SillyTavern?.getContext?.();
+const toast = (text, kind = 'info') => globalThis.toastr?.[kind]?.(text, 'Character Gallery');
+let openPanel = null;
 
-let state = loadState();
-let selectedIds = new Set();
-let history = [];
-let future = [];
-let boardRoot = null;
-let canvasViewport = null;
-let world = null;
-let activeObjectUrls = new Set();
-let searchText = '';
-let filterRole = 'all';
-let contextMenuItemId = null;
-let drawerOpen = false;
-let pointerMode = null;
-let pinchStart = null;
-let saveTimer = null;
-
-function loadState() {
-  try {
-    return normalizeState(JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null'));
-  } catch (error) {
-    console.warn('[Inspiration Board] Failed to load state', error);
-    return normalizeState(null);
-  }
-}
-
-function saveStateNow() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  const ctx = globalThis.SillyTavern?.getContext?.();
-  if (ctx?.extensionSettings) {
-    ctx.extensionSettings[MODULE] ??= {};
-    ctx.extensionSettings[MODULE].lastBoardId = state.activeBoardId;
-    ctx.extensionSettings[MODULE].version = 1;
-    ctx.saveSettingsDebounced?.();
-  }
-  updateSaveStatus('Saved');
-}
-
-function scheduleSave() {
-  updateSaveStatus('Saving…');
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(saveStateNow, 180);
-}
-
-function snapshot() {
-  history.push(JSON.stringify(state));
-  if (history.length > 40) history.shift();
-  future.length = 0;
-}
-
-function undo() {
-  if (!history.length) return;
-  future.push(JSON.stringify(state));
-  state = normalizeState(JSON.parse(history.pop()));
-  selectedIds.clear();
-  scheduleSave();
-  render();
-}
-
-function redo() {
-  if (!future.length) return;
-  history.push(JSON.stringify(state));
-  state = normalizeState(JSON.parse(future.pop()));
-  selectedIds.clear();
-  scheduleSave();
-  render();
-}
-
-function activeBoard() {
-  return state.boards.find(b => b.id === state.activeBoardId) || state.boards[0];
-}
-
-function itemById(id) {
-  return activeBoard().items.find(item => item.id === id);
-}
-
-function escapeHtml(value = '') {
-  return String(value).replace(/[&<>'"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;' })[ch]);
-}
-
-function toast(message, type = 'info') {
-  if (globalThis.toastr?.[type]) globalThis.toastr[type](message, 'Inspiration Board');
-  else console[type === 'error' ? 'error' : 'log'](`[Inspiration Board] ${message}`);
-}
-
-function updateSaveStatus(text) {
-  const el = boardRoot?.querySelector('[data-save-status]');
-  if (el) el.textContent = text;
-}
-
-function canvasCenterWorld() {
-  const rect = canvasViewport.getBoundingClientRect();
-  const view = activeBoard().view;
-  return {
-    x: (rect.width / 2 - view.x) / view.zoom,
-    y: (rect.height / 2 - view.y) / view.zoom
-  };
-}
-
-function setView(view, save = true) {
-  const board = activeBoard();
-  board.view = {
-    x: Number.isFinite(view.x) ? view.x : board.view.x,
-    y: Number.isFinite(view.y) ? view.y : board.view.y,
-    zoom: clamp(Number.isFinite(view.zoom) ? view.zoom : board.view.zoom, 0.12, 4)
-  };
-  applyWorldTransform();
-  updateZoomLabel();
-  renderMinimap();
-  if (save) scheduleSave();
-}
-
-function applyWorldTransform() {
-  if (!world) return;
-  const { x, y, zoom } = activeBoard().view;
-  world.style.transform = `translate(${x}px, ${y}px) scale(${zoom})`;
-}
-
-function updateZoomLabel() {
-  const label = boardRoot?.querySelector('[data-zoom-label]');
-  if (label) label.textContent = `${Math.round(activeBoard().view.zoom * 100)}%`;
-}
-
-async function imageRecordToUrl(imageId, thumb = true) {
-  const key = `${imageId}:${thumb ? 't' : 'o'}`;
-  if (imageUrlCache.has(key)) return imageUrlCache.get(key);
-  const record = await getImage(imageId);
-  if (!record) return '';
-  const blob = thumb && record.thumbnail ? record.thumbnail : record.blob;
-  const url = URL.createObjectURL(blob);
-  imageUrlCache.set(key, url);
-  activeObjectUrls.add(url);
-  return url;
-}
-
-function clearObjectUrls() {
-  for (const url of activeObjectUrls) URL.revokeObjectURL(url);
-  activeObjectUrls.clear();
-  imageUrlCache.clear();
-}
-
-async function dimensionsForBlob(blob) {
-  const bitmap = await createImageBitmap(blob);
-  const dimensions = { width: bitmap.width, height: bitmap.height };
-  bitmap.close?.();
-  return dimensions;
-}
-
-async function ingestFiles(fileList) {
-  const files = [...fileList].filter(file => file.type.startsWith('image/'));
-  if (!files.length) return toast('No image files were selected.', 'warning');
-  const accepted = files.filter(file => file.size <= MAX_FILE_MB * 1024 * 1024);
-  if (accepted.length !== files.length) toast(`Skipped ${files.length - accepted.length} image(s) over ${MAX_FILE_MB} MB.`, 'warning');
-  if (!accepted.length) return;
-
-  const center = canvasCenterWorld();
-  const positions = staggerPositions(accepted.length, center.x, center.y);
-  snapshot();
-  let added = 0;
-  let reused = 0;
-
-  for (let i = 0; i < accepted.length; i++) {
-    const file = accepted[i];
-    try {
-      const hash = await hashBlob(file);
-      let record = await getImageByHash(hash);
-      if (!record) {
-        const dims = await dimensionsForBlob(file);
-        const thumbnail = await makeThumbnail(file);
-        record = {
-          id: uid('image'),
-          name: file.name || `Image ${Date.now()}`,
-          mime: file.type || 'image/jpeg',
-          size: file.size,
-          hash,
-          width: dims.width,
-          height: dims.height,
-          blob: file,
-          thumbnail: thumbnail.blob,
-          createdAt: Date.now()
-        };
-        await putImage(record);
-      } else {
-        reused++;
-      }
-      const ratio = record.width / Math.max(1, record.height);
-      const cardW = ratio >= 1 ? 340 : 280;
-      const cardH = clamp(cardW / ratio, 190, 460);
-      const pos = positions[i];
-      activeBoard().items.push(makeImageItem({ imageId: record.id, name: file.name || record.name, width: cardW, height: cardH, x: pos.x, y: pos.y }));
-      added++;
-    } catch (error) {
-      console.error('[Inspiration Board] import failed', file.name, error);
-      toast(`Could not import ${file.name}.`, 'error');
+async function api(path, { method = 'GET', body, signal } = {}) {
+    const headers = { ...(context()?.getRequestHeaders?.() || {}) };
+    if (body !== undefined) headers['Content-Type'] = 'application/x-character-gallery';
+    const response = await fetch(`${API}${path}`, { method, headers, credentials: 'same-origin', cache: 'no-store', signal, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+    if (!response.ok) {
+        let message;
+        try { message = (await response.json()).error; } catch {}
+        throw new Error(message || (response.status === 404 ? 'Character Gallery API is not installed. Copy the bundled server plugin and restart SillyTavern.' : `Gallery request failed (HTTP ${response.status}).`));
     }
-  }
-  activeBoard().updatedAt = Date.now();
-  scheduleSave();
-  await renderItems();
-  toast(`Added ${added} image${added === 1 ? '' : 's'}${reused ? ` (${reused} duplicate file${reused === 1 ? '' : 's'} reused)` : ''}.`, 'success');
+    return response.json();
 }
-
-async function importImageUrl() {
-  const url = prompt('Paste a direct image URL:');
-  if (!url) return;
-  try {
-    const response = await fetch(url, { mode: 'cors' });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const blob = await response.blob();
-    if (!blob.type.startsWith('image/')) throw new Error('URL did not return an image');
-    const filename = new URL(url).pathname.split('/').pop() || 'web-image';
-    const file = new File([blob], filename, { type: blob.type });
-    await ingestFiles([file]);
-  } catch (error) {
-    console.error(error);
-    toast('That site blocked direct image importing. Save the image to your gallery and use Add Photos instead.', 'error');
-  }
+const imageUrl = (gallery, id) => `${API}/gallery/${gallery.id}/image/${id}`;
+const formatBytes = n => n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.ceil(n / 1024)} KB`;
+function fileData(file) { return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = () => reject(new Error(`Could not read ${file.name}`)); reader.readAsDataURL(file); }); }
+function dimensions(url) { return new Promise(resolve => { const img = new Image(); img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight }); img.onerror = () => resolve({ width: 0, height: 0 }); img.src = url; }); }
+function clickDownload(href, filename) { const a = document.createElement('a'); a.href = href; a.download = filename; document.body.append(a); a.click(); a.remove(); }
+async function downloadImage(gallery, image) {
+    const response = await fetch(imageUrl(gallery, image.id), { credentials: 'same-origin' });
+    if (!response.ok) throw new Error('Could not download this image.');
+    const url = URL.createObjectURL(await response.blob());
+    clickDownload(url, `${image.name.replace(/[^\w .-]/g, '_') || 'image'}.${image.filename.split('.').pop()}`);
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
+function bind(dialog, selector, callback) { dialog.querySelector(selector)?.addEventListener('click', callback); }
+function options(values, selected = '') { return `<option value="">Provider default</option>${values.map(x => `<option value="${esc(x)}" ${x === selected ? 'selected' : ''}>${esc(x)}</option>`).join('')}`; }
 
-function addNote() {
-  const center = canvasCenterWorld();
-  snapshot();
-  activeBoard().items.push(makeNoteItem({ x: center.x - 120, y: center.y - 80 }));
-  scheduleSave();
-  renderItems();
-}
-
-function addBoard() {
-  const name = prompt('Board name:', 'New Character');
-  if (!name?.trim()) return;
-  snapshot();
-  const board = makeBoard(name.trim());
-  state.boards.push(board);
-  state.activeBoardId = board.id;
-  selectedIds.clear();
-  scheduleSave();
-  render();
-}
-
-function renameBoard() {
-  const board = activeBoard();
-  const name = prompt('Rename board:', board.name);
-  if (!name?.trim()) return;
-  snapshot();
-  board.name = name.trim();
-  board.updatedAt = Date.now();
-  scheduleSave();
-  renderBoardPicker();
-}
-
-function deleteBoard() {
-  if (state.boards.length <= 1) return toast('You need at least one board.', 'warning');
-  const board = activeBoard();
-  if (!confirm(`Delete board “${board.name}”? Images used by other boards are kept.`)) return;
-  snapshot();
-  state.boards = state.boards.filter(b => b.id !== board.id);
-  state.activeBoardId = state.boards[0].id;
-  selectedIds.clear();
-  scheduleSave();
-  render();
-}
-
-function selectBoard(id) {
-  if (!state.boards.some(b => b.id === id)) return;
-  state.activeBoardId = id;
-  selectedIds.clear();
-  closeContextMenu();
-  scheduleSave();
-  render();
-}
-
-function deleteSelected() {
-  if (!selectedIds.size) return;
-  const board = activeBoard();
-  const items = board.items.filter(item => selectedIds.has(item.id));
-  if (!items.length) return;
-  if (state.settings.confirmDelete && !confirm(`Move ${items.length} item(s) to trash?`)) return;
-  snapshot();
-  state.trash.push(...items.map(item => ({ ...structuredClone(item), boardId: board.id, deletedAt: Date.now() })));
-  board.items = board.items.filter(item => !selectedIds.has(item.id));
-  if (board.character.mainImageId && selectedIds.has(board.character.mainImageId)) board.character.mainImageId = null;
-  board.character.referenceIds = board.character.referenceIds.filter(id => !selectedIds.has(id));
-  selectedIds.clear();
-  scheduleSave();
-  renderItems();
-  renderDrawer();
-}
-
-function duplicateSelected() {
-  if (!selectedIds.size) return;
-  snapshot();
-  const copies = activeBoard().items.filter(item => selectedIds.has(item.id)).map(item => duplicateItem(item));
-  activeBoard().items.push(...copies);
-  selectedIds = new Set(copies.map(item => item.id));
-  scheduleSave();
-  renderItems();
-}
-
-function smartArrange() {
-  const board = activeBoard();
-  const movable = board.items.filter(item => !item.locked);
-  if (!movable.length) return;
-  snapshot();
-  const positions = staggerPositions(movable.length, 0, 0);
-  movable.forEach((item, index) => Object.assign(item, positions[index]));
-  scheduleSave();
-  renderItems();
-  fitBoard();
-}
-
-function fitBoard() {
-  const rect = canvasViewport.getBoundingClientRect();
-  setView(fitItems(activeBoard().items, rect.width, rect.height), true);
-}
-
-function zoomAt(clientX, clientY, factor) {
-  const rect = canvasViewport.getBoundingClientRect();
-  const board = activeBoard();
-  const old = board.view.zoom;
-  const next = clamp(old * factor, 0.12, 4);
-  const px = clientX - rect.left;
-  const py = clientY - rect.top;
-  const wx = (px - board.view.x) / old;
-  const wy = (py - board.view.y) / old;
-  setView({ zoom: next, x: px - wx * next, y: py - wy * next }, false);
-  scheduleSave();
-}
-
-function openContextMenu(itemId, clientX, clientY) {
-  contextMenuItemId = itemId;
-  const item = itemById(itemId);
-  if (!item) return;
-  const menu = boardRoot.querySelector('.ib-context-menu');
-  menu.innerHTML = `
-    ${item.type === 'image' ? '<button data-action="main">★ Set as Main Portrait</button><button data-action="reference">✦ Add/Remove Character Reference</button><div class="ib-menu-label">Reference type</div>' + ROLE_OPTIONS.map(role => `<button data-action="role" data-role="${role}" class="${item.role === role ? 'active' : ''}">${role[0].toUpperCase() + role.slice(1)}</button>`).join('') : '<button data-action="edit-note">✎ Edit Note</button>'}
-    <button data-action="tags"># Edit Tags</button>
-    <button data-action="collection">▣ Set Collection</button>
-    <button data-action="lock">${item.locked ? '🔓 Unlock' : '🔒 Lock'}</button>
-    <button data-action="duplicate">⧉ Duplicate</button>
-    <button data-action="delete" class="danger">🗑 Move to Trash</button>`;
-  const rect = boardRoot.getBoundingClientRect();
-  const x = clamp(clientX - rect.left, 8, rect.width - 250);
-  const y = clamp(clientY - rect.top, 8, rect.height - 440);
-  menu.style.left = `${x}px`;
-  menu.style.top = `${y}px`;
-  menu.classList.add('open');
-}
-
-function closeContextMenu() {
-  contextMenuItemId = null;
-  boardRoot?.querySelector('.ib-context-menu')?.classList.remove('open');
-}
-
-function handleContextAction(button) {
-  const item = itemById(contextMenuItemId);
-  if (!item) return closeContextMenu();
-  const action = button.dataset.action;
-  snapshot();
-  if (action === 'main' && item.type === 'image') {
-    activeBoard().character.mainImageId = item.id;
-    if (!activeBoard().character.referenceIds.includes(item.id)) activeBoard().character.referenceIds.push(item.id);
-  } else if (action === 'reference' && item.type === 'image') {
-    const refs = activeBoard().character.referenceIds;
-    activeBoard().character.referenceIds = refs.includes(item.id) ? refs.filter(id => id !== item.id) : [...refs, item.id];
-  } else if (action === 'role' && item.type === 'image') {
-    item.role = button.dataset.role;
-  } else if (action === 'edit-note' && item.type === 'note') {
-    const value = prompt('Note text:', item.text);
-    if (value !== null) item.text = value;
-  } else if (action === 'tags') {
-    const value = prompt('Tags, separated by commas:', item.tags.join(', '));
-    if (value !== null) item.tags = value.split(',').map(x => x.trim()).filter(Boolean).slice(0, 30);
-  } else if (action === 'collection') {
-    const value = prompt('Collection name (leave blank for none):', item.collection || '');
-    if (value !== null) {
-      item.collection = value.trim();
-      if (item.collection && !state.collections.includes(item.collection)) state.collections.push(item.collection);
-    }
-  } else if (action === 'lock') {
-    item.locked = !item.locked;
-  } else if (action === 'duplicate') {
-    activeBoard().items.push(duplicateItem(item));
-  } else if (action === 'delete') {
-    selectedIds = new Set([item.id]);
-    deleteSelected();
-    closeContextMenu();
-    return;
-  } else {
-    history.pop();
-    return;
-  }
-  scheduleSave();
-  closeContextMenu();
-  renderItems();
-  renderDrawer();
-}
-
-function toggleSelection(id, additive = false) {
-  if (!additive) selectedIds.clear();
-  if (selectedIds.has(id) && additive) selectedIds.delete(id);
-  else selectedIds.add(id);
-  updateSelectionStyles();
-}
-
-function updateSelectionStyles() {
-  boardRoot?.querySelectorAll('.ib-item').forEach(el => el.classList.toggle('selected', selectedIds.has(el.dataset.itemId)));
-  const count = boardRoot?.querySelector('[data-selection-count]');
-  if (count) count.textContent = selectedIds.size ? `${selectedIds.size} selected` : `${activeBoard().items.length} items`;
-}
-
-function itemMatches(item) {
-  if (filterRole !== 'all' && (item.type !== 'image' || item.role !== filterRole)) return false;
-  if (!searchText) return true;
-  const haystack = [item.name, item.text, item.role, item.collection, ...(item.tags || [])].join(' ').toLowerCase();
-  return haystack.includes(searchText.toLowerCase());
-}
-
-async function renderItems() {
-  if (!world) return;
-  world.innerHTML = '';
-  const board = activeBoard();
-  for (const item of board.items) {
-    if (!itemMatches(item)) continue;
-    const el = document.createElement('div');
-    el.className = `ib-item ib-${item.type}${selectedIds.has(item.id) ? ' selected' : ''}${item.locked ? ' locked' : ''}`;
-    el.dataset.itemId = item.id;
-    el.style.left = `${item.x}px`;
-    el.style.top = `${item.y}px`;
-    el.style.width = `${item.width}px`;
-    el.style.height = `${item.height}px`;
-    if (item.type === 'image') {
-      const isMain = board.character.mainImageId === item.id;
-      const isRef = board.character.referenceIds.includes(item.id);
-      el.innerHTML = `<img alt="${escapeHtml(item.name)}" draggable="false"><div class="ib-card-top"><span>${escapeHtml(item.role)}</span>${isMain ? '<b title="Main portrait">★</b>' : ''}${isRef ? '<b title="Character reference">✦</b>' : ''}<button class="ib-item-menu" aria-label="Image options">•••</button></div><div class="ib-card-bottom">${escapeHtml(item.name || 'Image')}</div><div class="ib-resize-handle" aria-label="Resize"></div>`;
-      const img = el.querySelector('img');
-      imageRecordToUrl(item.imageId, true).then(url => { if (url && img.isConnected) img.src = url; });
-    } else {
-      el.innerHTML = `<div class="ib-note-text">${escapeHtml(item.text).replace(/\n/g, '<br>')}</div><button class="ib-item-menu" aria-label="Note options">•••</button><div class="ib-resize-handle" aria-label="Resize"></div>`;
-    }
-    world.appendChild(el);
-  }
-  updateSelectionStyles();
-  renderMinimap();
-}
-
-function renderBoardPicker() {
-  const select = boardRoot?.querySelector('[data-board-picker]');
-  if (!select) return;
-  select.innerHTML = state.boards.map(board => `<option value="${board.id}" ${board.id === state.activeBoardId ? 'selected' : ''}>${escapeHtml(board.name)}</option>`).join('');
-}
-
-function renderMinimap() {
-  const map = boardRoot?.querySelector('.ib-minimap-inner');
-  if (!map || !canvasViewport) return;
-  const items = activeBoard().items;
-  map.innerHTML = '';
-  if (!items.length) return;
-  const minX = Math.min(...items.map(i => i.x));
-  const minY = Math.min(...items.map(i => i.y));
-  const maxX = Math.max(...items.map(i => i.x + i.width));
-  const maxY = Math.max(...items.map(i => i.y + i.height));
-  const w = Math.max(1, maxX - minX);
-  const h = Math.max(1, maxY - minY);
-  for (const item of items) {
-    const dot = document.createElement('span');
-    dot.style.left = `${((item.x - minX) / w) * 90 + 5}%`;
-    dot.style.top = `${((item.y - minY) / h) * 90 + 5}%`;
-    dot.style.width = `${Math.max(3, item.width / w * 90)}%`;
-    dot.style.height = `${Math.max(3, item.height / h * 90)}%`;
-    dot.className = item.type === 'note' ? 'note' : '';
-    map.appendChild(dot);
-  }
-}
-
-function renderDrawer() {
-  const drawer = boardRoot?.querySelector('.ib-character-drawer');
-  if (!drawer) return;
-  drawer.classList.toggle('open', drawerOpen);
-  const c = activeBoard().character;
-  const fields = ['name', 'description', 'personality', 'scenario', 'first_message', 'mes_example', 'creator_notes', 'system_prompt', 'post_history_instructions', 'tags'];
-  fields.forEach(field => {
-    const input = drawer.querySelector(`[data-char-field="${field}"]`);
-    if (input && input !== document.activeElement) input.value = c[field] || '';
-  });
-  const refs = drawer.querySelector('.ib-reference-strip');
-  refs.innerHTML = '';
-  const refItems = c.referenceIds.map(id => itemById(id)).filter(Boolean);
-  for (const item of refItems) {
-    const box = document.createElement('button');
-    box.className = `ib-reference ${c.mainImageId === item.id ? 'main' : ''}`;
-    box.dataset.refId = item.id;
-    box.title = `${item.role}: ${item.name}`;
-    box.innerHTML = `<img alt=""><span>${escapeHtml(item.role)}</span>`;
-    const img = box.querySelector('img');
-    imageRecordToUrl(item.imageId, true).then(url => { if (url && img.isConnected) img.src = url; });
-    refs.appendChild(box);
-  }
-  drawer.querySelector('[data-ref-count]').textContent = `${refItems.length} reference${refItems.length === 1 ? '' : 's'}`;
-}
-
-async function sendToCharacterCreator() {
-  const ctx = globalThis.SillyTavern?.getContext?.();
-  if (!ctx?.createCharacterData) return toast('This SillyTavern version does not expose the character creator data.', 'error');
-  const c = activeBoard().character;
-  const target = ctx.createCharacterData;
-  const textFields = ['name', 'description', 'personality', 'scenario', 'first_message', 'mes_example', 'creator_notes', 'system_prompt', 'post_history_instructions', 'tags'];
-  for (const field of textFields) target[field] = c[field] || '';
-
-  if (c.mainImageId) {
-    const item = itemById(c.mainImageId);
-    const record = item ? await getImage(item.imageId) : null;
-    if (record?.blob) {
-      const file = new File([record.blob], record.name || 'character.png', { type: record.mime || record.blob.type || 'image/png' });
-      const dt = new DataTransfer();
-      dt.items.add(file);
-      target.avatar = dt.files;
-    }
-  }
-
-  closeBoard();
-  const createButton = document.querySelector('#rm_button_create');
-  if (createButton) {
-    createButton.click();
-    setTimeout(() => {
-      const mapping = {
-        '#character_name_pole': c.name,
-        '#description_textarea': c.description,
-        '#personality_textarea': c.personality,
-        '#scenario_pole': c.scenario,
-        '#firstmessage_textarea': c.first_message,
-        '#mes_example_textarea': c.mes_example,
-        '#creator_notes_textarea': c.creator_notes,
-        '#system_prompt_textarea': c.system_prompt,
-        '#post_history_instructions_textarea': c.post_history_instructions,
-        '#tags_textarea': c.tags
-      };
-      for (const [selector, value] of Object.entries(mapping)) {
-        const input = document.querySelector(selector);
-        if (input) {
-          input.value = value || '';
-          input.dispatchEvent(new Event('input', { bubbles: true }));
-        }
-      }
-    }, 150);
-    toast('Character draft sent to SillyTavern.', 'success');
-  } else {
-    toast('Draft is prepared. Open SillyTavern’s character creator to continue.', 'success');
-  }
-}
-
-async function backupAll() {
-  const images = await listImages();
-  const serialized = [];
-  for (const image of images) {
-    const bytes = new Uint8Array(await image.blob.arrayBuffer());
-    let binary = '';
-    const chunk = 0x8000;
-    for (let i = 0; i < bytes.length; i += chunk) binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-    serialized.push({
-      id: image.id, name: image.name, mime: image.mime, size: image.size, hash: image.hash,
-      width: image.width, height: image.height, createdAt: image.createdAt,
-      data: btoa(binary)
+function chooseGroupCharacter(chars) {
+    return new Promise(resolve => {
+        const dialog = document.createElement('dialog'); dialog.className = 'cgs-picker';
+        dialog.innerHTML = `<h2>Whose gallery?</h2><p>Choose a character from this group.</p>${chars.map((c, i) => `<button type="button" data-pick="${i}">${esc(c.name)}</button>`).join('')}<button type="button" data-dismiss>Cancel</button>`;
+        document.body.append(dialog);
+        const finish = value => { dialog.close(); dialog.remove(); resolve(value); };
+        dialog.querySelectorAll('[data-pick]').forEach(b => b.onclick = () => finish(chars[Number(b.dataset.pick)]));
+        bind(dialog, '[data-dismiss]', () => finish(null)); dialog.oncancel = e => { e.preventDefault(); finish(null); }; dialog.showModal();
     });
-  }
-  const backup = { format: 'sillytavern-inspiration-board', version: 1, exportedAt: Date.now(), state, images: serialized };
-  const blob = new Blob([JSON.stringify(backup)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `inspiration-board-backup-${new Date().toISOString().slice(0, 10)}.json`;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-  toast('Backup exported.', 'success');
+}
+async function openCurrentGallery() {
+    let character = characterFromContext(context());
+    if (!character && context()?.groupId) character = await chooseGroupCharacter(groupCharacters(context()));
+    if (!character) { toast('Open a character chat first.'); return; }
+    if (openPanel?.character.avatar === character.avatar) { openPanel.dialog.focus(); return; }
+    await openPanel?.close();
+    openPanel = new GalleryPanel(character);
+    await openPanel.open();
 }
 
-async function restoreBackup(file) {
-  try {
-    const backup = JSON.parse(await file.text());
-    if (backup?.format !== 'sillytavern-inspiration-board' || backup?.version !== 1) throw new Error('Unsupported backup');
-    if (!confirm('Restore this backup? Current boards and stored images will be replaced.')) return;
-    await clearImages();
-    for (const image of backup.images || []) {
-      const binary = atob(image.data);
-      const bytes = Uint8Array.from(binary, ch => ch.charCodeAt(0));
-      const blob = new Blob([bytes], { type: image.mime || 'image/jpeg' });
-      const thumbnail = await makeThumbnail(blob);
-      await putImage({ ...image, blob, thumbnail: thumbnail.blob, data: undefined });
+class GalleryPanel {
+    constructor(character) {
+        this.character = character; this.gallery = null; this.settings = settingsWithDefaults(); this.models = [];
+        this.tab = 'gallery'; this.closed = false; this.busy = false; this.uploading = false; this.limit = 48;
+        this.saveTail = Promise.resolve(); this.catalogEpoch = 0; this.gallerySignature = ''; this.status = {};
+        this.filters = { search: '', sort: 'name', safety: 'all', referenceOnly: false };
     }
-    state = normalizeState(backup.state);
-    selectedIds.clear();
-    history = [];
-    future = [];
-    clearObjectUrls();
-    saveStateNow();
-    render();
-    toast('Backup restored.', 'success');
-  } catch (error) {
-    console.error(error);
-    toast('Could not restore that backup.', 'error');
-  }
-}
-
-async function cleanUnusedImages() {
-  const used = new Set(state.boards.flatMap(board => board.items.filter(i => i.type === 'image').map(i => i.imageId)));
-  const all = await listImages();
-  const unused = all.filter(image => !used.has(image.id));
-  if (!unused.length) return toast('No unused images found.', 'info');
-  if (!confirm(`Delete ${unused.length} unused stored image(s)? This cannot be undone unless you have a backup.`)) return;
-  for (const image of unused) await deleteImage(image.id);
-  clearObjectUrls();
-  toast(`Deleted ${unused.length} unused image(s).`, 'success');
-}
-
-function render() {
-  if (!boardRoot) return;
-  renderBoardPicker();
-  applyWorldTransform();
-  updateZoomLabel();
-  renderItems();
-  renderDrawer();
-}
-
-function buildUi() {
-  const root = document.createElement('div');
-  root.id = 'st-inspiration-board';
-  root.className = 'ib-shell';
-  root.innerHTML = `
-    <div class="ib-topbar">
-      <div class="ib-brand"><span>✦</span><div><b>Inspiration Board</b><small data-save-status>Saved</small></div></div>
-      <select data-board-picker aria-label="Current board"></select>
-      <button data-cmd="new-board" title="New board">＋</button>
-      <button data-cmd="rename-board" title="Rename board">✎</button>
-      <div class="ib-search"><span>⌕</span><input data-search placeholder="Search images, tags…"></div>
-      <select data-role-filter aria-label="Filter role"><option value="all">All refs</option>${ROLE_OPTIONS.map(r => `<option value="${r}">${r}</option>`).join('')}</select>
-      <button data-cmd="undo" title="Undo">↶</button><button data-cmd="redo" title="Redo">↷</button>
-      <button data-cmd="close" class="ib-close" title="Close">×</button>
-    </div>
-    <div class="ib-body">
-      <aside class="ib-rail">
-        <button data-cmd="photos" class="primary"><span>＋</span><label>Add Photos</label></button>
-        <button data-cmd="url"><span>⌁</span><label>Image URL</label></button>
-        <button data-cmd="note"><span>▤</span><label>Note</label></button>
-        <button data-cmd="smart"><span>✦</span><label>Arrange</label></button>
-        <button data-cmd="fit"><span>⊙</span><label>Fit</label></button>
-        <div class="ib-rail-spacer"></div>
-        <button data-cmd="backup"><span>⇩</span><label>Backup</label></button>
-        <button data-cmd="restore"><span>⇧</span><label>Restore</label></button>
-        <button data-cmd="clean"><span>⌫</span><label>Clean</label></button>
-        <button data-cmd="delete-board" class="danger"><span>🗑</span><label>Board</label></button>
-      </aside>
-      <main class="ib-canvas" tabindex="0">
-        <div class="ib-world"></div>
-        <div class="ib-canvas-hint">Drag empty space to pan • Pinch/scroll to zoom • Tap an image then ••• for options</div>
-        <div class="ib-minimap"><div class="ib-minimap-inner"></div></div>
-        <div class="ib-zoom"><button data-cmd="zoom-out">−</button><span data-zoom-label>100%</span><button data-cmd="zoom-in">＋</button></div>
-        <div class="ib-selection-tools"><span data-selection-count>0 items</span><button data-cmd="duplicate">⧉</button><button data-cmd="delete">🗑</button></div>
-        <button class="ib-fab" data-cmd="photos" title="Add multiple photos">＋</button>
-      </main>
-    </div>
-    <section class="ib-character-drawer">
-      <button class="ib-drawer-handle" data-cmd="drawer"><span></span><b>Character Creator</b><em data-ref-count>0 references</em><i>⌃</i></button>
-      <div class="ib-drawer-content">
-        <div class="ib-reference-strip"></div>
-        <div class="ib-form-grid">
-          <label>Name<input data-char-field="name" placeholder="Character name"></label>
-          <label>Tags<input data-char-field="tags" placeholder="fantasy, rogue, noble"></label>
-          <label class="wide">Appearance / Description<textarea data-char-field="description" placeholder="Physical appearance, outfit, distinctive features…"></textarea></label>
-          <label class="wide">Personality<textarea data-char-field="personality" placeholder="Traits, behavior, motivations…"></textarea></label>
-          <label class="wide">Scenario<textarea data-char-field="scenario"></textarea></label>
-          <label class="wide">First Message<textarea data-char-field="first_message"></textarea></label>
-          <details class="wide"><summary>Advanced character fields</summary>
-            <label>Example Messages<textarea data-char-field="mes_example"></textarea></label>
-            <label>Creator Notes<textarea data-char-field="creator_notes"></textarea></label>
-            <label>System Prompt<textarea data-char-field="system_prompt"></textarea></label>
-            <label>Post-History Instructions<textarea data-char-field="post_history_instructions"></textarea></label>
-          </details>
-        </div>
-        <button class="ib-send-character" data-cmd="send-character">Send Draft to SillyTavern Character Creator →</button>
-      </div>
-    </section>
-    <div class="ib-context-menu"></div>
-    <input class="ib-hidden-input" data-photo-input type="file" accept="image/*" multiple>
-    <input class="ib-hidden-input" data-backup-input type="file" accept="application/json,.json">
-  `;
-  document.body.appendChild(root);
-  boardRoot = root;
-  canvasViewport = root.querySelector('.ib-canvas');
-  world = root.querySelector('.ib-world');
-  bindUi();
-}
-
-function bindUi() {
-  boardRoot.addEventListener('click', event => {
-    const command = event.target.closest('[data-cmd]')?.dataset.cmd;
-    if (command) {
-      event.preventDefault();
-      if (command === 'photos') boardRoot.querySelector('[data-photo-input]').click();
-      else if (command === 'url') importImageUrl();
-      else if (command === 'note') addNote();
-      else if (command === 'smart') smartArrange();
-      else if (command === 'fit') fitBoard();
-      else if (command === 'undo') undo();
-      else if (command === 'redo') redo();
-      else if (command === 'new-board') addBoard();
-      else if (command === 'rename-board') renameBoard();
-      else if (command === 'delete-board') deleteBoard();
-      else if (command === 'close') closeBoard();
-      else if (command === 'zoom-in') zoomAt(canvasViewport.getBoundingClientRect().left + canvasViewport.clientWidth / 2, canvasViewport.getBoundingClientRect().top + canvasViewport.clientHeight / 2, 1.2);
-      else if (command === 'zoom-out') zoomAt(canvasViewport.getBoundingClientRect().left + canvasViewport.clientWidth / 2, canvasViewport.getBoundingClientRect().top + canvasViewport.clientHeight / 2, 1 / 1.2);
-      else if (command === 'duplicate') duplicateSelected();
-      else if (command === 'delete') deleteSelected();
-      else if (command === 'drawer') { drawerOpen = !drawerOpen; renderDrawer(); }
-      else if (command === 'send-character') sendToCharacterCreator();
-      else if (command === 'backup') backupAll();
-      else if (command === 'restore') boardRoot.querySelector('[data-backup-input]').click();
-      else if (command === 'clean') cleanUnusedImages();
-      return;
+    q(selector) { return this.dialog.querySelector(selector); }
+    async open() {
+        const dialog = this.dialog = document.createElement('dialog'); dialog.className = 'cgs-shell';
+        dialog.setAttribute('aria-label', `${this.character.name} · Character Gallery Studio`);
+        dialog.innerHTML = `
+        <header class="cgs-header"><div><span class="cgs-eyebrow">CHARACTER GALLERY STUDIO <small>v${VERSION}</small></span><h2>${esc(this.character.name)}</h2></div><button type="button" class="cgs-icon" data-close aria-label="Close gallery">✕</button></header>
+        <nav class="cgs-tabs" aria-label="Gallery sections"><button type="button" data-tab="gallery" class="active">Gallery <span data-count>0</span></button><button type="button" data-tab="generate">Generate <span data-running></span></button><button type="button" data-tab="connections">Connections</button></nav>
+        <div class="cgs-notice" data-notice role="status" aria-live="polite">Opening this character’s gallery…</div>
+        <main class="cgs-content">
+        <section data-page="gallery">
+          <div class="cgs-toolbar"><button type="button" class="cgs-primary" data-upload>＋ Upload images</button><button type="button" data-avatar>Import character avatar</button><button type="button" data-refresh>Refresh</button><input type="file" data-files accept="image/png,image/jpeg,image/webp,image/gif,image/avif,image/svg+xml" multiple hidden></div>
+          <p class="cgs-help">Originals stay in this character’s private gallery. Tap an image to view it. Use Ref to select it for generation.</p>
+          <div class="cgs-filter-row"><input data-gallery-search type="search" placeholder="Search names, tags or notes…" aria-label="Search gallery"><select data-gallery-filter aria-label="Gallery filter"><option value="all">All images</option><option value="generated">Generated</option><option value="upload">Uploaded</option><option value="favorite">Favorites</option><option value="references">Selected / main refs</option>${ROLES.map(r => `<option value="${r}">${r[0].toUpperCase() + r.slice(1)} references</option>`).join('')}</select></div>
+          <div class="cgs-selection"><span data-selected>0 selected</span><button type="button" data-use-selected>Generate with selected</button><button type="button" data-clear-selected>Clear</button><button type="button" data-delete-selected class="cgs-danger">Delete selected</button></div>
+          <div class="cgs-grid" data-grid></div><button type="button" data-more hidden>Show more images</button>
+        </section>
+        <section data-page="generate" hidden>
+          <div class="cgs-provider-tabs"><button type="button" data-provider="openrouter">OpenRouter</button><button type="button" data-provider="venice">Venice</button></div>
+          <div class="cgs-filter-row"><input data-model-search type="search" placeholder="Search image models…" aria-label="Search models"><select data-model-sort aria-label="Sort models"><option value="name">Name</option><option value="price">Price / image · low first</option><option value="newest">Newest</option></select></div>
+          <div class="cgs-filter-row"><label class="cgs-check"><input type="checkbox" data-ref-only> Reference-capable only</label><select data-safety-filter aria-label="Model policy filter"><option value="all">All model policies</option><option value="uncensored">Advertised uncensored / NSFW</option><option value="unmoderated">Unmoderated (OpenRouter)</option></select></div>
+          <div class="cgs-models" data-models role="listbox" aria-label="Image models"><p>Select Generate to load the live catalog.</p></div>
+          <div class="cgs-model-info" data-model-info></div>
+          <div class="cgs-gen-options" data-params></div>
+          <div class="cgs-reference-box"><div class="cgs-field"><label for="cgs-ref-mode">Reference images</label><select id="cgs-ref-mode" data-ref-mode><option value="auto">Auto: selected, otherwise main</option><option value="selected">Selected images only</option><option value="main">Main reference only</option><option value="none">None · prompt only</option></select></div><div data-ref-plan class="cgs-help"></div><div data-refs class="cgs-refs"></div><button type="button" data-pick-refs>Choose from gallery</button></div>
+          <div class="cgs-field"><label for="cgs-prompt">What should the image show?</label><textarea id="cgs-prompt" data-prompt rows="5" maxlength="32000" placeholder="Describe the image or the changes to your references…"></textarea></div>
+          <div class="cgs-presets"><button type="button" data-preset="portrait">Portrait</button><button type="button" data-preset="full">Full body</button><button type="button" data-preset="outfit">New outfit</button><button type="button" data-character-notes>Copy character description</button></div>
+          <div class="cgs-field" data-negative-wrap hidden><label for="cgs-negative">Negative prompt</label><textarea id="cgs-negative" data-negative rows="2" maxlength="2000" placeholder="What to avoid…"></textarea></div>
+          <label class="cgs-check" data-safe-wrap hidden><input type="checkbox" data-safe> Venice safe mode (provider may blur adult output)</label>
+          <div class="cgs-send-bar"><span data-estimate>Cost depends on the selected model.</span><button type="button" data-generate class="cgs-primary">Generate image</button></div>
+          <p class="cgs-help">Generation uses paid API credits. Only your prompt and chosen image references are sent. Chat messages are not sent automatically.</p>
+          <section class="cgs-results" data-results aria-label="Completed generation images"></section>
+          <details class="cgs-history" open><summary>Recent generation jobs</summary><div data-jobs></div></details>
+        </section>
+        <section data-page="connections" hidden>
+          <h3>Provider connections</h3><p class="cgs-help">Uses the same server-side OpenRouter and Venice keys as Inspiration Board. Saving a key here also changes that provider’s shared SillyTavern key. Keys are never stored in your gallery or returned by this plugin.</p>
+          <div data-connection-status></div>
+          <form data-key-form class="cgs-key-form"><label>Provider<select data-key-provider><option value="openrouter">OpenRouter</option><option value="venice">Venice</option></select></label><label>API key<input type="password" data-key autocomplete="new-password" spellcheck="false" placeholder="Paste key only to add or replace it"></label><button type="submit" class="cgs-primary">Save + test key</button></form>
+          <h3>Storage</h3><p>Images, prompts, main references and settings are stored on your SillyTavern server, separately for each user and character avatar filename. Your images are not uploaded to GitHub.</p><p class="cgs-help">Renaming the character display name keeps the gallery. Replacing or renaming its avatar filename starts a different gallery; the old files are kept on the server.</p>
+          <h3>Server plugin</h3><p data-server-status>Checking connection…</p><p class="cgs-help">Install the bundled <code>server-plugin/character-gallery-api</code> folder into <code>SillyTavern/plugins/</code>, enable server plugins and restart SillyTavern. This does not replace Inspiration Board Sync.</p>
+        </section>
+        </main><footer class="cgs-footer"><span>Gallery stays with <b>${esc(this.character.name)}</b>, even while jobs run.</span><span data-save-state>Server storage</span></footer>`;
+        document.body.append(dialog); dialog.showModal();
+        dialog.oncancel = e => { e.preventDefault(); void this.close(); };
+        bind(dialog, '[data-close]', () => void this.close());
+        dialog.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => this.showTab(b.dataset.tab));
+        dialog.querySelectorAll('[data-provider]').forEach(b => b.onclick = () => { this.settings.provider = b.dataset.provider; this.settingsChanged(); this.updateProviderButtons(); void this.loadModels(); });
+        bind(dialog, '[data-upload]', () => this.q('[data-files]').click());
+        this.q('[data-files]').onchange = e => { const files = [...e.target.files]; e.target.value = ''; void this.upload(files); };
+        bind(dialog, '[data-avatar]', () => void this.importAvatar());
+        bind(dialog, '[data-refresh]', () => void this.refresh(true));
+        this.q('[data-gallery-search]').oninput = () => { this.limit = 48; this.renderGallery(true); };
+        this.q('[data-gallery-filter]').onchange = () => { this.limit = 48; this.renderGallery(true); };
+        bind(dialog, '[data-more]', () => { this.limit += 48; this.renderGallery(true); });
+        bind(dialog, '[data-use-selected]', () => { this.settings.referenceMode = 'selected'; this.q('[data-ref-mode]').value = 'selected'; this.settingsChanged(); this.showTab('generate'); this.renderRefs(); });
+        bind(dialog, '[data-clear-selected]', () => { this.settings.selectedIds = []; this.settingsChanged(); this.renderGallery(true); this.renderRefs(); });
+        bind(dialog, '[data-delete-selected]', () => void this.deleteSelected());
+        bind(dialog, '[data-pick-refs]', () => this.showTab('gallery'));
+        this.q('[data-model-search]').oninput = e => { this.filters.search = e.target.value; this.renderModelList(); };
+        this.q('[data-model-sort]').onchange = e => { this.filters.sort = e.target.value; this.renderModelList(); };
+        this.q('[data-safety-filter]').onchange = e => { this.filters.safety = e.target.value; this.renderModelList(); };
+        this.q('[data-ref-only]').onchange = e => { this.filters.referenceOnly = e.target.checked; this.renderModelList(); };
+        this.q('[data-ref-mode]').onchange = e => { this.settings.referenceMode = e.target.value; this.settingsChanged(); this.renderRefs(); };
+        this.q('[data-prompt]').oninput = e => { this.settings.prompt = e.target.value; this.settingsChanged(); };
+        this.q('[data-negative]').oninput = e => { this.settings.negativePrompt = e.target.value; this.settingsChanged(); };
+        this.q('[data-safe]').onchange = e => { this.settings.safeMode = e.target.checked; this.settingsChanged(); };
+        dialog.querySelectorAll('[data-preset]').forEach(b => b.onclick = () => {
+            const presets = { portrait: 'A detailed portrait of the character in the reference image. Keep the same face, hair and visual style.', full: 'A full-body image of the character in the reference image, from head to feet. Keep the same identity and visual style.', outfit: 'Keep the character’s identity and art style from the reference. Change the outfit to: ' };
+            this.settings.prompt = presets[b.dataset.preset]; this.q('[data-prompt]').value = this.settings.prompt; this.settingsChanged(); this.q('[data-prompt]').focus();
+        });
+        bind(dialog, '[data-character-notes]', () => { this.settings.prompt = this.character.description.slice(0, 32000); this.q('[data-prompt]').value = this.settings.prompt; this.settingsChanged(); });
+        bind(dialog, '[data-generate]', () => void this.generate());
+        this.q('[data-key-form]').onsubmit = e => { e.preventDefault(); void this.saveKey(); };
+        dialog.ondragover = e => { if ([...e.dataTransfer.types].includes('Files')) e.preventDefault(); };
+        dialog.ondrop = e => { if (e.dataTransfer.files.length) { e.preventDefault(); void this.upload([...e.dataTransfer.files]); } };
+        try {
+            await this.checkConnection();
+            this.gallery = await api('/gallery/open', { method: 'POST', body: this.character });
+            if (this.closed) return;
+            this.settings = settingsWithDefaults(this.gallery.settings);
+            this.q('[data-prompt]').value = this.settings.prompt; this.q('[data-negative]').value = this.settings.negativePrompt;
+            this.q('[data-safe]').checked = this.settings.safeMode; this.q('[data-ref-mode]').value = this.settings.referenceMode;
+            this.renderGallery(true); this.renderJobs(); this.renderResults(); this.updateProviderButtons();
+            this.notice(this.gallery.images.length ? 'Gallery ready.' : 'Start by uploading images or importing the character avatar.');
+            this.poll();
+        } catch (error) { this.notice(error.message, true); this.showTab('connections'); }
     }
-    const menuButton = event.target.closest('.ib-item-menu');
-    if (menuButton) {
-      event.stopPropagation();
-      const itemEl = menuButton.closest('.ib-item');
-      openContextMenu(itemEl.dataset.itemId, event.clientX, event.clientY);
-      return;
+    notice(message, error = false) { if (this.closed) return; const el = this.q('[data-notice]'); el.textContent = message; el.classList.toggle('error', error); }
+    async checkConnection() {
+        this.status = await api('/status');
+        this.q('[data-server-status]').textContent = `Connected · Character Gallery API ${this.status.version}`;
+        this.q('[data-connection-status]').innerHTML = ['openrouter', 'venice'].map(p => `<p class="cgs-connection">${p === 'venice' ? 'Venice' : 'OpenRouter'} <b>${this.status.configured[p] ? 'Key saved' : 'Not configured'}</b></p>`).join('');
     }
-    const menuAction = event.target.closest('.ib-context-menu button');
-    if (menuAction) return handleContextAction(menuAction);
-    const ref = event.target.closest('.ib-reference');
-    if (ref) {
-      const item = itemById(ref.dataset.refId);
-      if (item) {
-        selectedIds = new Set([item.id]);
-        drawerOpen = false;
-        renderDrawer();
-        updateSelectionStyles();
-        const rect = canvasViewport.getBoundingClientRect();
-        setView({ ...activeBoard().view, x: rect.width / 2 - (item.x + item.width / 2) * activeBoard().view.zoom, y: rect.height / 2 - (item.y + item.height / 2) * activeBoard().view.zoom });
-      }
-      return;
+    settingsChanged() {
+        if (!this.gallery) return;
+        this.q('[data-save-state]').textContent = 'Saving settings…'; this.dirty = true;
+        clearTimeout(this.saveTimer); this.saveTimer = setTimeout(() => void this.flushSettings().catch(() => {}), 300);
     }
-    if (!event.target.closest('.ib-context-menu')) closeContextMenu();
-  });
-
-  boardRoot.querySelector('[data-photo-input]').addEventListener('change', async event => {
-    await ingestFiles(event.target.files);
-    event.target.value = '';
-  });
-  boardRoot.querySelector('[data-backup-input]').addEventListener('change', async event => {
-    const file = event.target.files?.[0];
-    if (file) await restoreBackup(file);
-    event.target.value = '';
-  });
-  boardRoot.querySelector('[data-board-picker]').addEventListener('change', event => selectBoard(event.target.value));
-  boardRoot.querySelector('[data-search]').addEventListener('input', event => { searchText = event.target.value.trim(); renderItems(); });
-  boardRoot.querySelector('[data-role-filter]').addEventListener('change', event => { filterRole = event.target.value; renderItems(); });
-  boardRoot.querySelectorAll('[data-char-field]').forEach(input => input.addEventListener('input', event => {
-    activeBoard().character[event.target.dataset.charField] = event.target.value;
-    activeBoard().updatedAt = Date.now();
-    scheduleSave();
-  }));
-
-  canvasViewport.addEventListener('wheel', event => {
-    event.preventDefault();
-    zoomAt(event.clientX, event.clientY, event.deltaY < 0 ? 1.1 : 1 / 1.1);
-  }, { passive: false });
-  canvasViewport.addEventListener('contextmenu', event => {
-    const item = event.target.closest('.ib-item');
-    if (item) {
-      event.preventDefault();
-      openContextMenu(item.dataset.itemId, event.clientX, event.clientY);
+    flushSettings() {
+        clearTimeout(this.saveTimer);
+        if (!this.gallery || !this.dirty) return this.saveTail;
+        this.dirty = false;
+        const snapshot = copy(this.settings), galleryId = this.gallery.id;
+        this.saveTail = this.saveTail.catch(() => {}).then(() => api(`/gallery/${galleryId}/settings`, { method: 'PATCH', body: { settings: snapshot } })).then(() => {
+            if (!this.closed && !this.dirty) this.q('[data-save-state]').textContent = 'Settings saved';
+        }).catch(error => { this.dirty = true; if (!this.closed) this.q('[data-save-state]').textContent = 'Settings not saved'; this.notice(error.message, true); throw error; });
+        return this.saveTail;
     }
-  });
-
-  canvasViewport.addEventListener('pointerdown', onPointerDown);
-  canvasViewport.addEventListener('pointermove', onPointerMove);
-  canvasViewport.addEventListener('pointerup', onPointerUp);
-  canvasViewport.addEventListener('pointercancel', onPointerUp);
-
-  canvasViewport.addEventListener('dragover', event => { event.preventDefault(); canvasViewport.classList.add('dragover'); });
-  canvasViewport.addEventListener('dragleave', () => canvasViewport.classList.remove('dragover'));
-  canvasViewport.addEventListener('drop', event => {
-    event.preventDefault();
-    canvasViewport.classList.remove('dragover');
-    if (event.dataTransfer?.files?.length) ingestFiles(event.dataTransfer.files);
-  });
-
-  document.addEventListener('paste', onPaste);
-  document.addEventListener('keydown', onKeyDown);
-}
-
-const activePointers = new Map();
-
-function onPointerDown(event) {
-  if (event.button !== 0 && event.pointerType === 'mouse') return;
-  canvasViewport.setPointerCapture?.(event.pointerId);
-  activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
-  if (activePointers.size === 2) {
-    const pts = [...activePointers.values()];
-    pinchStart = {
-      distance: Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y),
-      zoom: activeBoard().view.zoom,
-      x: activeBoard().view.x,
-      y: activeBoard().view.y,
-      centerX: (pts[0].x + pts[1].x) / 2,
-      centerY: (pts[0].y + pts[1].y) / 2
-    };
-    pointerMode = { type: 'pinch' };
-    return;
-  }
-  const itemEl = event.target.closest('.ib-item');
-  if (itemEl) {
-    const item = itemById(itemEl.dataset.itemId);
-    if (!item) return;
-    const additive = event.ctrlKey || event.metaKey || event.shiftKey;
-    toggleSelection(item.id, additive);
-    if (event.target.closest('.ib-item-menu')) return;
-    if (event.target.closest('.ib-resize-handle') && !item.locked) {
-      snapshot();
-      pointerMode = { type: 'resize', id: item.id, startX: event.clientX, startY: event.clientY, width: item.width, height: item.height };
-    } else if (!item.locked) {
-      snapshot();
-      const selectedItems = activeBoard().items.filter(i => selectedIds.has(i.id) && !i.locked);
-      pointerMode = { type: 'move', startX: event.clientX, startY: event.clientY, items: selectedItems.map(i => ({ id: i.id, x: i.x, y: i.y })) };
+    async close() {
+        try { await this.flushSettings(); } catch { toast('Settings could not be saved. Check your server connection.', 'warning'); }
+        this.closed = true; clearTimeout(this.pollTimer); clearTimeout(this.saveTimer); this.catalogEpoch++;
+        this.viewer?.close(); this.viewer?.remove(); this.dialog.close(); this.dialog.remove();
+        if (openPanel === this) openPanel = null;
     }
-    event.stopPropagation();
-  } else {
-    selectedIds.clear();
-    updateSelectionStyles();
-    pointerMode = { type: 'pan', startX: event.clientX, startY: event.clientY, x: activeBoard().view.x, y: activeBoard().view.y };
-  }
-}
-
-function onPointerMove(event) {
-  if (activePointers.has(event.pointerId)) activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
-  if (!pointerMode) return;
-  if (pointerMode.type === 'pinch' && activePointers.size >= 2 && pinchStart) {
-    const pts = [...activePointers.values()];
-    const distance = Math.max(1, Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y));
-    const factor = distance / Math.max(1, pinchStart.distance);
-    const rect = canvasViewport.getBoundingClientRect();
-    const centerX = (pts[0].x + pts[1].x) / 2;
-    const centerY = (pts[0].y + pts[1].y) / 2;
-    const px = pinchStart.centerX - rect.left;
-    const py = pinchStart.centerY - rect.top;
-    const wx = (px - pinchStart.x) / pinchStart.zoom;
-    const wy = (py - pinchStart.y) / pinchStart.zoom;
-    const nextZoom = clamp(pinchStart.zoom * factor, 0.12, 4);
-    setView({ zoom: nextZoom, x: centerX - rect.left - wx * nextZoom, y: centerY - rect.top - wy * nextZoom }, false);
-    return;
-  }
-  if (pointerMode.type === 'pan') {
-    setView({ ...activeBoard().view, x: pointerMode.x + event.clientX - pointerMode.startX, y: pointerMode.y + event.clientY - pointerMode.startY }, false);
-  } else if (pointerMode.type === 'move') {
-    const zoom = activeBoard().view.zoom;
-    const dx = (event.clientX - pointerMode.startX) / zoom;
-    const dy = (event.clientY - pointerMode.startY) / zoom;
-    for (const start of pointerMode.items) {
-      const item = itemById(start.id);
-      if (item) { item.x = start.x + dx; item.y = start.y + dy; }
+    showTab(tab) {
+        this.tab = tab; this.dialog.querySelectorAll('[data-page]').forEach(p => p.hidden = p.dataset.page !== tab);
+        this.dialog.querySelectorAll('[data-tab]').forEach(b => { b.classList.toggle('active', b.dataset.tab === tab); b.setAttribute('aria-selected', String(b.dataset.tab === tab)); });
+        if (tab === 'generate') { if (!this.models.length || this.loadedProvider !== this.settings.provider) void this.loadModels(); this.renderRefs(); this.renderResults(); this.renderJobs(); }
     }
-    renderItemPositions();
-  } else if (pointerMode.type === 'resize') {
-    const item = itemById(pointerMode.id);
-    if (item) {
-      const zoom = activeBoard().view.zoom;
-      item.width = clamp(pointerMode.width + (event.clientX - pointerMode.startX) / zoom, 100, 1200);
-      item.height = clamp(pointerMode.height + (event.clientY - pointerMode.startY) / zoom, 80, 1400);
-      renderItemPositions();
+    updateProviderButtons() { this.dialog.querySelectorAll('[data-provider]').forEach(b => b.classList.toggle('active', b.dataset.provider === this.settings.provider)); }
+    async refresh(force = false) {
+        if (!this.gallery || this.closed) return;
+        try {
+            this.gallery = await api(`/gallery/${this.gallery.id}`);
+            if (this.closed) return;
+            // Do not overwrite controls/drafts while a job is polling.
+            this.renderGallery(force); this.renderJobs(); this.renderResults(); this.renderRefs();
+            if (force) this.notice('Gallery refreshed.');
+        } catch (error) { this.notice(error.message, true); }
     }
-  }
-}
-
-function onPointerUp(event) {
-  activePointers.delete(event.pointerId);
-  if (pointerMode && pointerMode.type !== 'pinch') {
-    activeBoard().updatedAt = Date.now();
-    scheduleSave();
-    renderMinimap();
-  }
-  if (activePointers.size < 2) pinchStart = null;
-  if (activePointers.size === 0) pointerMode = null;
-}
-
-function renderItemPositions() {
-  boardRoot.querySelectorAll('.ib-item').forEach(el => {
-    const item = itemById(el.dataset.itemId);
-    if (!item) return;
-    el.style.left = `${item.x}px`;
-    el.style.top = `${item.y}px`;
-    el.style.width = `${item.width}px`;
-    el.style.height = `${item.height}px`;
-  });
-}
-
-async function onPaste(event) {
-  if (!boardRoot?.classList.contains('open')) return;
-  const files = [...(event.clipboardData?.files || [])].filter(file => file.type.startsWith('image/'));
-  if (files.length) {
-    event.preventDefault();
-    await ingestFiles(files);
-  }
-}
-
-function onKeyDown(event) {
-  if (!boardRoot?.classList.contains('open')) return;
-  const editing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || '');
-  if (event.key === 'Escape') {
-    if (contextMenuItemId) closeContextMenu(); else closeBoard();
-  } else if (!editing && (event.key === 'Delete' || event.key === 'Backspace')) {
-    event.preventDefault(); deleteSelected();
-  } else if (!editing && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
-    event.preventDefault(); event.shiftKey ? redo() : undo();
-  } else if (!editing && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'd') {
-    event.preventDefault(); duplicateSelected();
-  }
-}
-
-function openBoard() {
-  if (!boardRoot) buildUi();
-  boardRoot.classList.add('open');
-  document.body.classList.add('ib-open');
-  render();
-  setTimeout(() => canvasViewport.focus(), 0);
-}
-
-function closeBoard() {
-  boardRoot?.classList.remove('open');
-  document.body.classList.remove('ib-open');
-  closeContextMenu();
-  saveStateNow();
-}
-
-function injectLauncher() {
-  if (document.querySelector('#ib-launcher')) return;
-  const button = document.createElement('button');
-  button.id = 'ib-launcher';
-  button.type = 'button';
-  button.className = 'menu_button interactable';
-  button.title = 'Open Inspiration Board';
-  button.innerHTML = '<span>✦</span><span class="ib-launch-label">Inspiration Board</span>';
-  button.addEventListener('click', openBoard);
-
-  const candidates = [
-    document.querySelector('#extensionsMenu'),
-    document.querySelector('#extensionsMenuButton')?.parentElement,
-    document.querySelector('#left-nav-panel'),
-    document.querySelector('#top-bar')
-  ].filter(Boolean);
-  if (candidates[0]) candidates[0].appendChild(button);
-  else {
-    button.classList.add('ib-floating-launcher');
-    document.body.appendChild(button);
-  }
-}
-
-function registerShortcut() {
-  document.addEventListener('keydown', event => {
-    if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'b') {
-      event.preventDefault();
-      boardRoot?.classList.contains('open') ? closeBoard() : openBoard();
+    poll() {
+        if (this.closed) return;
+        this.pollTimer = setTimeout(async () => { await this.refresh(); this.poll(); }, this.gallery?.jobs.some(j => ACTIVE.has(j.status)) ? 2000 : 10000);
     }
-  });
+    async upload(files) {
+        if (!this.gallery || this.uploading) return;
+        this.uploading = true; this.q('[data-upload]').disabled = true;
+        const targetId = this.gallery.id; let uploaded = 0; const errors = [];
+        for (let i = 0; i < files.length; i++) {
+            const file = files[i]; this.notice(`Uploading ${i + 1} / ${files.length}: ${file.name}`);
+            try {
+                if (file.size > 25 * 1024 * 1024) throw new Error('File is larger than 25 MB.');
+                if (!/^image\/(png|jpeg|webp|gif|avif|svg\+xml)$/.test(file.type)) throw new Error('Unsupported image format.');
+                const dataUrl = await fileData(file), size = await dimensions(dataUrl);
+                await api(`/gallery/${targetId}/images`, { method: 'POST', body: { dataUrl, name: file.name, ...size } }); uploaded++;
+            } catch (error) { errors.push(`${file.name}: ${error.message}`); }
+        }
+        this.uploading = false;
+        if (!this.closed) { this.q('[data-upload]').disabled = false; await this.refresh(true); this.notice(`${uploaded} image(s) uploaded.${errors.length ? ` ${errors.length} failed: ${errors.join(' · ')}` : ''}`, errors.length > 0); }
+    }
+    async importAvatar() {
+        if (!this.gallery) return;
+        try {
+            const response = await fetch(`/characters/${encodeURIComponent(this.character.avatar)}`, { credentials: 'same-origin' });
+            if (!response.ok) throw new Error('Could not load the original character avatar. Upload its image instead.');
+            const blob = await response.blob(); await this.upload([new File([blob], this.character.avatar, { type: blob.type || 'image/png' })]);
+        } catch (error) { this.notice(error.message, true); }
+    }
+    toggleRef(id) {
+        const ids = this.settings.selectedIds;
+        this.settings.selectedIds = ids.includes(id) ? ids.filter(x => x !== id) : [...ids, id];
+        this.settingsChanged(); this.renderGallery(true); this.renderRefs();
+    }
+    visibleImages() {
+        if (!this.gallery) return [];
+        const term = this.q('[data-gallery-search]').value.trim().toLowerCase(), filter = this.q('[data-gallery-filter]').value;
+        return this.gallery.images.filter(i => (!term || `${i.name} ${i.notes} ${i.tags.join(' ')}`.toLowerCase().includes(term)) && (filter === 'all' || filter === i.source || filter === i.role || filter === 'favorite' && i.favorite || filter === 'references' && (this.settings.selectedIds.includes(i.id) || this.gallery.mainImageId === i.id)));
+    }
+    renderGallery(force = false) {
+        if (!this.gallery || this.closed) return;
+        this.q('[data-count]').textContent = this.gallery.images.length;
+        this.q('[data-selected]').textContent = `${this.settings.selectedIds.length} reference(s) selected`;
+        const rows = this.visibleImages(), signature = JSON.stringify([rows.map(i => [i.id, i.name, i.favorite, i.role]), this.settings.selectedIds, this.gallery.mainImageId, this.limit]);
+        if (!force && signature === this.gallerySignature) return; this.gallerySignature = signature;
+        this.q('[data-grid]').innerHTML = rows.length ? rows.slice(0, this.limit).map(i => `<article class="cgs-card ${this.settings.selectedIds.includes(i.id) ? 'selected' : ''}"><button type="button" class="cgs-image-open" data-view="${i.id}" aria-label="View ${esc(i.name)}"><img loading="lazy" decoding="async" src="${imageUrl(this.gallery, i.id)}" alt="${esc(i.name)}">${this.gallery.mainImageId === i.id ? '<span class="cgs-main-badge">MAIN</span>' : ''}</button><div class="cgs-card-name" title="${esc(i.name)}">${esc(i.name)}</div><div class="cgs-card-actions"><button type="button" data-ref="${i.id}" aria-pressed="${this.settings.selectedIds.includes(i.id)}">${this.settings.selectedIds.includes(i.id) ? '✓ Ref' : '＋ Ref'}</button><button type="button" data-favorite="${i.id}" aria-label="Toggle favorite" aria-pressed="${i.favorite}">${i.favorite ? '★' : '☆'}</button><span>${esc(i.role)}</span></div></article>`).join('') : '<div class="cgs-empty"><h3>Your character’s image space</h3><p>Upload references, collect outfit ideas, and keep generated images together here.</p></div>';
+        this.q('[data-more]').hidden = rows.length <= this.limit;
+        this.q('[data-grid]').querySelectorAll('[data-view]').forEach(b => b.onclick = () => this.openViewer(b.dataset.view, rows.map(i => i.id)));
+        this.q('[data-grid]').querySelectorAll('[data-ref]').forEach(b => b.onclick = () => this.toggleRef(b.dataset.ref));
+        this.q('[data-grid]').querySelectorAll('[data-favorite]').forEach(b => b.onclick = async () => {
+            const image = this.gallery.images.find(i => i.id === b.dataset.favorite);
+            try { await api(`/gallery/${this.gallery.id}/image/${image.id}`, { method: 'PATCH', body: { favorite: !image.favorite } }); await this.refresh(true); } catch (e) { this.notice(e.message, true); }
+        });
+    }
+    async deleteSelected() {
+        const ids = [...this.settings.selectedIds]; if (!ids.length || !confirm(`Delete ${ids.length} selected image(s) from ${this.character.name}’s gallery? This cannot be undone.`)) return;
+        try { await api(`/gallery/${this.gallery.id}/images`, { method: 'DELETE', body: { ids } }); this.settings.selectedIds = []; this.settingsChanged(); await this.refresh(true); }
+        catch (e) { this.notice(e.message, true); }
+    }
+    model() { return this.models.find(m => m.id === this.settings.providers[this.settings.provider].model); }
+    async loadModels() {
+        const provider = this.settings.provider, epoch = ++this.catalogEpoch;
+        this.updateProviderButtons(); this.q('[data-models]').innerHTML = '<p>Loading live models and per-image prices…</p>';
+        if (!this.gallery) return;
+        try {
+            const data = await api(`/models/${provider}`);
+            if (this.closed || epoch !== this.catalogEpoch) return;
+            this.models = data.models || []; this.loadedProvider = provider;
+            if (!this.settings.providers[provider].model && this.models.length) { this.settings.providers[provider].model = this.models[0].id; this.settingsChanged(); }
+            this.renderModelList(); this.renderModel();
+        } catch (e) { if (epoch === this.catalogEpoch && !this.closed) { this.models = []; this.q('[data-models]').textContent = e.message; this.notice(e.message, true); this.renderModel(); } }
+    }
+    renderModelList() {
+        const selected = this.settings.providers[this.settings.provider].model, rows = filteredModels(this.models, this.filters);
+        this.q('[data-models]').innerHTML = rows.length ? rows.map(m => `<button type="button" role="option" aria-selected="${m.id === selected}" data-model="${esc(m.id)}" class="cgs-model-option ${m.id === selected ? 'active' : ''}"><span><strong>${esc(m.name)}</strong><small>${m.refs.max ? `${m.refs.min ? 'Requires' : 'Supports'} refs · max ${m.refs.max}` : 'Prompt only'}${m.uncensored ? ' · Uncensored / NSFW' : ''}</small></span><b>${esc(priceLabel(m.price))}</b></button>`).join('') : '<p>No models match these filters. Your previous selection is kept.</p>';
+        this.q('[data-models]').querySelectorAll('[data-model]').forEach(b => b.onclick = () => { this.settings.providers[this.settings.provider].model = b.dataset.model; this.settingsChanged(); this.renderModelList(); this.renderModel(); });
+    }
+    renderModel() {
+        const m = this.model(), s = this.settings.providers[this.settings.provider];
+        if (!m) { this.q('[data-model-info]').textContent = 'Select a model from the live catalog.'; this.q('[data-params]').innerHTML = ''; this.renderRefs(); return; }
+        for (const [key, values] of [['aspect', m.params.aspects], ['resolution', m.params.resolutions], ['quality', m.params.qualities], ['format', m.params.formats]]) if (s[key] && !values.includes(s[key])) s[key] = '';
+        s.count = Math.min(s.count, m.params.maxCount);
+        this.q('[data-model-info]').innerHTML = `<strong>${esc(m.name)}</strong><div class="cgs-badges"><span>${esc(priceLabel(m.price))}</span><span>${m.refs.max ? `Reference input · ${m.refs.min}–${m.refs.max}` : 'No reference input'}</span><span>${esc(m.moderation)}</span></div><p>${esc(m.description)}</p>${m.refs.style ? '<p class="cgs-warning">Style-reference model: copies visual style, not necessarily character identity.</p>' : ''}`;
+        this.q('[data-params]').innerHTML = [['aspect', 'Aspect ratio', m.params.aspects], ['resolution', 'Resolution', m.params.resolutions], ['quality', 'Quality', m.params.qualities], ['format', 'Output format', m.params.formats]].filter(([, , values]) => values.length).map(([key, label, values]) => `<label>${label}<select data-param="${key}">${options(values, s[key])}</select></label>`).join('') + `<label>Image count<select data-param="count">${Array.from({ length: m.params.maxCount }, (_, i) => `<option ${s.count === i + 1 ? 'selected' : ''}>${i + 1}</option>`).join('')}</select></label>${m.params.seed ? `<label>Seed (optional)<input type="number" min="0" max="2147483647" data-param="seed" value="${esc(s.seed)}" placeholder="Random"></label>` : ''}`;
+        this.q('[data-params]').querySelectorAll('[data-param]').forEach(el => el.onchange = () => { s[el.dataset.param] = el.dataset.param === 'count' ? Number(el.value) : el.value; this.settingsChanged(); this.renderEstimate(); });
+        this.q('[data-negative-wrap]').hidden = !m.params.negative; this.q('[data-safe-wrap]').hidden = m.provider !== 'venice';
+        this.renderRefs(); this.renderEstimate(); this.settingsChanged();
+    }
+    renderEstimate() {
+        const m = this.model(); if (!m) return;
+        const count = this.settings.providers[m.provider].count;
+        this.q('[data-estimate]').textContent = m.price?.unit === 'img' && m.price.min !== null ? `${m.price.exact ? 'Base estimate' : 'From'}: $${(m.price.min * count).toFixed(3)} / ${count} image(s)${m.price.extra ? ' + input charges' : ''}. Quality / resolution may change cost.` : `${priceLabel(m.price)} · no reliable flat total.`;
+    }
+    renderRefs() {
+        if (!this.gallery || this.closed) return;
+        const refs = referenceImages(this.gallery, this.settings), m = this.model();
+        const text = !m ? 'Choose a model to check reference support.' : !m.refs.max ? refs.length ? 'NOT SENT: this model cannot use your selected images. Switch models or choose None before generating.' : 'Prompt-only model. No references will be sent.' : refs.length ? `${refs.length} original image(s) selected. First source: ${refs[0].name}. This model allows up to ${m.refs.max}.` : `No source selected.${m.refs.min ? ' This model requires a reference.' : ' Select references in Gallery, or set a main reference.'}`;
+        this.q('[data-ref-plan]').textContent = text;
+        this.q('[data-ref-plan]').classList.toggle('cgs-warning', Boolean(m && (refs.length > m.refs.max || refs.length < m.refs.min)));
+        const signature = JSON.stringify([refs.map(r => r.id), m?.id]);
+        if (signature !== this.refsSignature) {
+            this.refsSignature = signature; this.q('[data-refs]').innerHTML = refs.map((r, i) => `<button type="button" data-ref-preview="${r.id}" title="${esc(r.name)}"><img src="${imageUrl(this.gallery, r.id)}" alt="${esc(r.name)}"><span>${i + 1}${i === 0 ? ' · Base' : ''}</span></button>`).join('');
+            this.q('[data-refs]').querySelectorAll('[data-ref-preview]').forEach(b => b.onclick = () => this.openViewer(b.dataset.refPreview, refs.map(r => r.id)));
+        }
+    }
+    async generate() {
+        if (!this.gallery || this.busy) return;
+        const button = this.q('[data-generate]'); this.busy = true; button.disabled = true; button.textContent = 'Sending…';
+        try {
+            const settings = copy(this.settings); validateRequest(this.model(), settings, referenceImages(this.gallery, settings));
+            await this.flushSettings();
+            const { job } = await api(`/gallery/${this.gallery.id}/generate`, { method: 'POST', body: { settings } });
+            this.notice(`Job accepted by your server ✓ · ${job.id.slice(0, 8)}. Reference preparation is starting.`);
+            await this.refresh(); clearTimeout(this.pollTimer); this.poll();
+        } catch (e) { this.notice(e.message, true); }
+        finally { this.busy = false; if (!this.closed) { button.disabled = this.gallery?.jobs.some(j => ACTIVE.has(j.status)); button.textContent = button.disabled ? 'Generation running…' : 'Generate image'; } }
+    }
+    renderJobs() {
+        if (!this.gallery || this.closed) return;
+        const active = this.gallery.jobs.filter(j => ACTIVE.has(j.status)); this.q('[data-running]').textContent = active.length ? '• Running' : '';
+        const button = this.q('[data-generate]'); if (!this.busy) { button.disabled = active.length > 0; button.textContent = active.length ? 'Generation running…' : 'Generate image'; }
+        const jobs = this.gallery.jobs;
+        const signature = JSON.stringify(jobs.map(j => [j.id, j.status, j.message]));
+        if (signature === this.jobsSignature) return; this.jobsSignature = signature;
+        this.q('[data-jobs]').innerHTML = jobs.length ? jobs.map(j => `<article class="cgs-job ${esc(j.status)}"><div><strong>${esc(j.modelName)}</strong><span class="cgs-job-status">${ACTIVE.has(j.status) ? '<i class="cgs-spinner"></i>' : ''}${esc(j.status)}</span></div><p>${esc(j.message)}</p><small>${new Date(j.createdAt).toLocaleString()} · ${esc(j.characterName)}</small><details><summary>Prompt and request details</summary><p>${esc(j.settings.prompt)}</p><p>Job ${esc(j.id)}${j.responseId ? ` · Provider response ${esc(j.responseId)}` : ''}</p>${j.receipt ? `<p>${esc(j.receipt.endpoint)} · ${j.receipt.referenceCount} original reference(s) attached</p>${j.receipt.originals.map(r => `<p>${esc(r.id.slice(0, 8))} · ${formatBytes(r.bytes)} · SHA-256 ${esc(r.sha256.slice(0, 12))}…</p>`).join('')}<small>${esc(j.receipt.meaning)}</small>` : '<p>The provider request has not been dispatched yet.</p>'}</details>${ACTIVE.has(j.status) ? `<button type="button" data-cancel-job="${j.id}">Stop waiting</button>` : ['failed', 'canceled', 'interrupted'].includes(j.status) ? `<button type="button" data-retry-job="${j.id}">Load settings to retry</button>` : ''}</article>`).join('') : '<p class="cgs-help">Your generation history will appear here.</p>';
+        this.q('[data-jobs]').querySelectorAll('[data-cancel-job]').forEach(b => b.onclick = async () => {
+            if (!confirm('Stop waiting locally? The provider may still process and charge for this request.')) return;
+            try { await api(`/gallery/${this.gallery.id}/job/${b.dataset.cancelJob}/cancel`, { method: 'POST', body: {} }); await this.refresh(); } catch (e) { this.notice(e.message, true); }
+        });
+        this.q('[data-jobs]').querySelectorAll('[data-retry-job]').forEach(b => b.onclick = () => {
+            const job = jobs.find(j => j.id === b.dataset.retryJob); this.settings = settingsWithDefaults(job.settings);
+            this.q('[data-prompt]').value = this.settings.prompt; this.q('[data-negative]').value = this.settings.negativePrompt; this.q('[data-safe]').checked = this.settings.safeMode; this.q('[data-ref-mode]').value = this.settings.referenceMode;
+            this.settingsChanged(); void this.loadModels(); this.notice('Previous settings loaded. Review them, then press Generate. No automatic paid retry was sent.');
+        });
+    }
+    renderResults() {
+        if (!this.gallery || this.closed) return;
+        const rows = this.gallery.images.filter(i => i.source === 'generated').slice(0, 8), signature = rows.map(i => i.id).join();
+        if (signature === this.resultsSignature) return; this.resultsSignature = signature;
+        this.q('[data-results]').innerHTML = rows.length ? `<h3>Recent results</h3><p class="cgs-help">Saved in ${esc(this.character.name)}’s gallery. Tap to view full size.</p>${rows.map(i => `<article><button type="button" class="cgs-result-image" data-result="${i.id}"><img src="${imageUrl(this.gallery, i.id)}" loading="lazy" alt="${esc(i.name)}"></button><div class="cgs-toolbar"><button type="button" data-result="${i.id}">View full</button><button type="button" data-result-ref="${i.id}">Use as reference</button><button type="button" data-download="${i.id}">Download</button></div></article>`).join('')}` : '';
+        this.q('[data-results]').querySelectorAll('[data-result]').forEach(b => b.onclick = () => this.openViewer(b.dataset.result, rows.map(i => i.id)));
+        this.q('[data-results]').querySelectorAll('[data-result-ref]').forEach(b => b.onclick = () => { this.settings.selectedIds = [b.dataset.resultRef]; this.settings.referenceMode = 'selected'; this.q('[data-ref-mode]').value = 'selected'; this.settingsChanged(); this.renderRefs(); this.renderGallery(true); this.notice('Result selected as the next reference.'); });
+        this.q('[data-results]').querySelectorAll('[data-download]').forEach(b => b.onclick = () => downloadImage(this.gallery, rows.find(i => i.id === b.dataset.download)).catch(e => this.notice(e.message, true)));
+    }
+    async saveKey() {
+        const form = this.q('[data-key-form]'), button = form.querySelector('button'); button.disabled = true;
+        try {
+            await api('/key', { method: 'POST', body: { provider: this.q('[data-key-provider]').value, key: this.q('[data-key]').value.trim() } });
+            this.q('[data-key]').value = ''; await this.checkConnection(); this.notice('API key saved on the server and tested.');
+            if (!this.gallery) { this.gallery = await api('/gallery/open', { method: 'POST', body: this.character }); this.settings = settingsWithDefaults(this.gallery.settings); }
+            await this.loadModels();
+        } catch (e) { this.notice(e.message, true); } finally { button.disabled = false; }
+    }
+    openViewer(id, ids = this.gallery.images.map(i => i.id)) {
+        this.viewer?.close(); this.viewer?.remove();
+        const view = this.viewer = document.createElement('dialog'); view.className = 'cgs-viewer';
+        view.innerHTML = `<header><strong data-v-title></strong><button type="button" data-v-close aria-label="Close image">✕</button></header><div class="cgs-view-stage" data-stage><img data-v-image alt=""></div><div class="cgs-view-toolbar"><button type="button" data-prev aria-label="Previous image">‹</button><button type="button" data-next aria-label="Next image">›</button><button type="button" data-zoom-out aria-label="Zoom out">−</button><button type="button" data-zoom-in aria-label="Zoom in">＋</button><button type="button" data-fit>Fit</button><button type="button" data-v-download>Download</button><button type="button" data-v-main>Set main ref</button><button type="button" data-v-ref>Use ref</button></div><details class="cgs-edit-info"><summary>Image details / tags</summary><label>Name<input data-v-name></label><label>Role<select data-v-role>${ROLES.map(r => `<option>${r}</option>`).join('')}</select></label><label>Tags (comma separated)<input data-v-tags></label><label>Notes<textarea data-v-notes rows="2"></textarea></label><button type="button" data-v-save>Save details</button><p data-v-info></p></details>`;
+        document.body.append(view); view.showModal();
+        const q = s => view.querySelector(s), stage = q('[data-stage]'), img = q('[data-v-image]');
+        let at = Math.max(0, ids.indexOf(id)), zoom = 1, x = 0, y = 0, start = null, pinch = null; const pointers = new Map();
+        const current = () => this.gallery.images.find(i => i.id === ids[at]);
+        const transform = () => img.style.transform = `translate(${x}px, ${y}px) scale(${zoom})`;
+        const fit = () => { zoom = 1; x = y = 0; transform(); };
+        const show = delta => {
+            at = (at + delta + ids.length) % ids.length; const image = current(); if (!image) return;
+            fit(); img.src = imageUrl(this.gallery, image.id); img.alt = image.name; q('[data-v-title]').textContent = `${at + 1} / ${ids.length} · ${image.name}`;
+            q('[data-v-name]').value = image.name; q('[data-v-role]').value = image.role; q('[data-v-tags]').value = image.tags.join(', '); q('[data-v-notes]').value = image.notes;
+            q('[data-v-info]').textContent = `${formatBytes(image.bytes)} · ${image.mime}${image.generation ? ` · ${image.generation.provider} / ${image.generation.model}` : ''}`;
+            q('[data-v-main]').textContent = image.id === this.gallery.mainImageId ? '✓ Main ref' : 'Set main ref';
+            q('[data-v-ref]').textContent = this.settings.selectedIds.includes(image.id) ? '✓ Ref selected' : 'Use ref';
+        };
+        const dismiss = () => { view.close(); view.remove(); if (this.viewer === view) this.viewer = null; };
+        q('[data-v-close]').onclick = dismiss; view.oncancel = e => { e.preventDefault(); dismiss(); };
+        q('[data-prev]').onclick = () => show(-1); q('[data-next]').onclick = () => show(1); q('[data-fit]').onclick = fit;
+        const scale = factor => { zoom = Math.max(1, Math.min(6, zoom * factor)); if (zoom === 1) x = y = 0; transform(); };
+        q('[data-zoom-in]').onclick = () => scale(1.4); q('[data-zoom-out]').onclick = () => scale(1 / 1.4);
+        stage.onwheel = e => { e.preventDefault(); scale(e.deltaY < 0 ? 1.1 : 1 / 1.1); };
+        stage.onpointerdown = e => { stage.setPointerCapture(e.pointerId); pointers.set(e.pointerId, { x: e.clientX, y: e.clientY }); if (pointers.size === 1) start = { px: e.clientX, py: e.clientY, x, y, zoom }; if (pointers.size === 2) { const [a, b] = [...pointers.values()]; pinch = { distance: Math.hypot(a.x - b.x, a.y - b.y), zoom }; start = null; } };
+        stage.onpointermove = e => {
+            if (!pointers.has(e.pointerId)) return; pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+            if (pointers.size === 2 && pinch) { const [a, b] = [...pointers.values()]; zoom = Math.max(1, Math.min(6, pinch.zoom * Math.hypot(a.x - b.x, a.y - b.y) / Math.max(1, pinch.distance))); transform(); }
+            else if (start && zoom > 1) { x = start.x + e.clientX - start.px; y = start.y + e.clientY - start.py; transform(); }
+        };
+        const release = e => { if (start && start.zoom === 1 && zoom === 1 && Math.abs(e.clientX - start.px) > 60 && Math.abs(e.clientY - start.py) < 80) show(e.clientX < start.px ? 1 : -1); pointers.delete(e.pointerId); pinch = null; start = null; };
+        stage.onpointerup = release; stage.onpointercancel = () => { pointers.clear(); start = pinch = null; };
+        view.onkeydown = e => { if (/INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return; if (e.key === 'ArrowLeft') { e.preventDefault(); show(-1); } if (e.key === 'ArrowRight') { e.preventDefault(); show(1); } };
+        q('[data-v-download]').onclick = () => downloadImage(this.gallery, current()).catch(e => toast(e.message, 'error'));
+        q('[data-v-ref]').onclick = () => { this.toggleRef(current().id); show(0); };
+        q('[data-v-main]').onclick = async () => { try { await api(`/gallery/${this.gallery.id}/main`, { method: 'POST', body: { imageId: current().id } }); await this.refresh(true); show(0); } catch (e) { toast(e.message, 'error'); } };
+        q('[data-v-save]').onclick = async () => { try { await api(`/gallery/${this.gallery.id}/image/${current().id}`, { method: 'PATCH', body: { name: q('[data-v-name]').value, role: q('[data-v-role]').value, tags: q('[data-v-tags]').value.split(',').map(x => x.trim()), notes: q('[data-v-notes]').value } }); await this.refresh(true); show(0); toast('Image details saved.', 'success'); } catch (e) { toast(e.message, 'error'); } };
+        show(0);
+    }
 }
 
-function init() {
-  try {
-    buildUi();
-    injectLauncher();
-    registerShortcut();
-    console.info('[Inspiration Board] loaded');
-  } catch (error) {
-    console.error('[Inspiration Board] failed to initialize', error);
-  }
+function installLaunchers() {
+    const menu = document.getElementById('extensionsMenu');
+    if (menu && !document.getElementById('cgs-menu-button')) {
+        const button = document.createElement('div'); button.id = 'cgs-menu-button'; button.className = 'list-group-item flex-container'; button.tabIndex = 0; button.setAttribute('role', 'button');
+        button.innerHTML = '<span class="fa-solid fa-images"></span><span>Character Gallery Studio</span>'; button.onclick = () => void openCurrentGallery(); button.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); void openCurrentGallery(); } }; menu.append(button);
+    }
+    const settings = document.getElementById('extensions_settings2') || document.getElementById('extensions_settings');
+    if (settings && !document.getElementById('cgs-extension-settings')) {
+        const panel = document.createElement('details'); panel.id = 'cgs-extension-settings'; panel.innerHTML = `<summary>Character Gallery Studio · ${VERSION}</summary><p>Per-character images, references and generation.</p><button type="button" data-cgs-open>Open current character gallery</button><label><input type="checkbox" data-cgs-floating> Show floating Gallery button</label>`; settings.append(panel);
+        panel.querySelector('[data-cgs-open]').onclick = () => void openCurrentGallery();
+        const toggle = panel.querySelector('[data-cgs-floating]'); toggle.checked = localStorage.getItem('cgs-floating') !== 'false';
+        toggle.onchange = () => { localStorage.setItem('cgs-floating', String(toggle.checked)); installLaunchers(); };
+    }
+    let floating = document.getElementById('cgs-floating');
+    if (!floating) { floating = document.createElement('button'); floating.id = 'cgs-floating'; floating.type = 'button'; floating.textContent = '▧ Gallery'; floating.title = 'Open the current character’s gallery'; floating.onclick = () => void openCurrentGallery(); document.body.append(floating); }
+    floating.hidden = localStorage.getItem('cgs-floating') === 'false';
 }
-
-if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true });
-else init();
-
-export { openBoard, closeBoard };
+function boot() {
+    if (globalThis.__characterGalleryStudio) return;
+    globalThis.__characterGalleryStudio = { version: VERSION, open: openCurrentGallery };
+    installLaunchers();
+    const c = context();
+    for (const name of ['APP_READY', 'CHAT_CHANGED']) if (c?.event_types?.[name]) c.eventSource?.on(c.event_types[name], () => installLaunchers());
+    // Bounded startup retries cover older ST versions without a permanent polling loop.
+    let attempts = 0; const timer = setInterval(() => { installLaunchers(); if (++attempts >= 15 || document.getElementById('cgs-menu-button') && document.getElementById('cgs-extension-settings')) clearInterval(timer); }, 1000);
+    console.info(`[Character Gallery Studio] v${VERSION} ready`);
+}
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once: true }); else boot();
