@@ -7,8 +7,8 @@
   "js": "index.js",
   "css": "style.css",
   "author": "sogyboi",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "homePage": "https://github.com/sogyboi/SillyTavern-Inspiration-Board/tree/character-gallery-studio",
-  "auto_update": true,
+  "auto_update": false,
   "minimum_client_version": "1.12.0"
 }
