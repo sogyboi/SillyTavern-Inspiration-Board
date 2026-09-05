@@ -1,1 +1,0 @@
-Character Gallery Studio v0.1.0 source bundle a616dc7acc4e14b3309d58dd3f9c51099195d092c6b0dcf485a9c83d3254002c

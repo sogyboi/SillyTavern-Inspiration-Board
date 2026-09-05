@@ -1,8 +1,0 @@
-{
-  "name": "sillytavern-inspiration-board-sync",
-  "version": "0.6.1",
-  "type": "module",
-  "private": true,
-  "main": "index.mjs",
-  "description": "Optional server sync, Android share target, and safe remote page/image bridge, and native JSON capture endpoint for Inspiration Board"
-}
