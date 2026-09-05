@@ -1,0 +1,58 @@
+name: Prepare Character Gallery Studio
+
+on:
+  push:
+    branches: [feature/character-gallery-studio]
+    paths: [cgs-publish.trigger]
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/character-gallery-studio
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify and unpack reviewed source bundle
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          import { createHash } from 'node:crypto';
+          import { brotliDecompressSync } from 'node:zlib';
+          import assert from 'node:assert/strict';
+          const parts = fs.readdirSync('cgs-publish').filter(name => /^part-\d{2}\.txt$/.test(name)).sort();
+          assert.equal(parts.length, 6);
+          const encoded = parts.map(name => fs.readFileSync(path.join('cgs-publish', name), 'utf8').trim()).join('');
+          const bytes = Buffer.from(encoded, 'base64');
+          assert.equal(createHash('sha256').update(bytes).digest('hex'), 'a616dc7acc4e14b3309d58dd3f9c51099195d092c6b0dcf485a9c83d3254002c');
+          const files = JSON.parse(brotliDecompressSync(bytes).toString('utf8'));
+          assert.equal(Object.keys(files).length, 17);
+          for (const [name, content] of Object.entries(files)) {
+            assert.ok(!path.isAbsolute(name) && !name.split('/').includes('..') && !name.startsWith('.github/') && !name.startsWith('.git/'));
+            assert.equal(typeof content, 'string');
+            fs.mkdirSync(path.dirname(name), { recursive: true });
+            fs.writeFileSync(name, content);
+          }
+          assert.equal(JSON.parse(fs.readFileSync('manifest.json', 'utf8')).js, 'index.js');
+          fs.writeFileSync('/tmp/cgs-product-paths.txt', Object.keys(files).join('\n'));
+          console.log('Verified all 17 Character Gallery Studio source files.');
+          NODE
+      - name: Run behavior tests and syntax checks
+        run: |
+          npm test
+          npm run check
+          bash -n tools/install-plugin.sh
+      - name: Commit product files only
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          while IFS= read -r file || [ -n "$file" ]; do git add -- "$file"; done < /tmp/cgs-product-paths.txt
+          git commit -m 'Build Character Gallery Studio v0.1.0'
+          git push origin HEAD:feature/character-gallery-studio
