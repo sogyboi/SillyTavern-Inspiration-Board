@@ -1,12 +1,12 @@
 {
   "name": "sillytavern-character-gallery-studio",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Private per-character galleries and OpenRouter/Venice image generation for SillyTavern.",
   "scripts": {
     "test": "node --test tests/cgs-*.test.mjs",
-    "check": "node --check index.js && node --check server-plugin/character-gallery-api/index.mjs && node --check server-plugin/character-gallery-api/core.mjs && node --check server-plugin/character-gallery-api/models.mjs"
+    "check": "node tools/check.mjs"
   },
   "license": "MIT"
 }

@@ -2,7 +2,27 @@
 
 A separate SillyTavern extension for each character's images and reference-guided generation. Built from the provider-routing lessons in Inspiration Board, without depending on its canvas or changing its data.
 
-**Release: 0.1.1.** This extension is published on the `character-gallery-studio` branch of the public `sogyboi/SillyTavern-Inspiration-Board` repository. The repository's `main` branch remains Inspiration Board. Install this branch into its **own folder**, not over an existing Inspiration Board installation.
+**Release: 0.2.0.** This extension is published on the `character-gallery-studio` branch of the public `sogyboi/SillyTavern-Inspiration-Board` repository. The repository's `main` branch remains Inspiration Board. Install this branch into its **own folder**, not over an existing Inspiration Board installation.
+
+## New in 0.2.0: organized galleries
+
+**Review, Library, Archived, Recently deleted.** New generations are saved immediately but start in Review. Keep, favorite, archive, assign albums, trash, restore and permanently delete using the selection boxes and bulk toolbar. Selecting for organizing is separate from selecting a reference. Existing images stay in Library on upgrade. Nothing in Recently deleted expires automatically; permanent deletion requires confirmation. Images used by an active local job cannot be deleted.
+
+**Albums.** Create, rename or delete albums with Manage albums. Select images and use Add to album; an image can belong to multiple albums without duplicating its original file. Removing an album does not delete images. Album filtering combines with search, roles and favorites.
+
+**Reference sets.** In Gallery, Identity pins a persistent identity reference; Ref selects a temporary outfit, style, pose or scene image. In Generate, save a named set, load it, update/rename it, or delete the set without deleting images. Sets preserve identity/temporary layers, explicit base image, order and optional reference guidance. Clear temporary keeps pinned identities. Use Base to send an image first; left arrows reorder within each layer. Guidance is appended to the prompt only when references are attached. A set containing missing/deleted images is marked incomplete and cannot be loaded until restored or updated. Pinning identity is an organization/instruction feature, not a guarantee of model fidelity.
+
+**Fold layout.** Generate and its current model/reference/cost summary stay at the bottom of the panel, while model selection and advanced options can collapse. Star models to pin them first (per character and provider), or use Favorite models only. The unfolded portrait view uses two columns and touch-sized controls. Browsing builds small cached previews as needed; viewers, downloads and generation continue using originals. Preview generation gracefully falls back to originals for unsupported browser formats.
+
+**Backup and relink.** Connections now includes Export this gallery, Import backup, Attach an existing gallery, and Use original gallery. Backups are portable `.cgs.jsonl.gz` bundles containing originals, Review/Archive/Trash states, names, tags, notes, albums, reference sets, prompts, per-character settings, favorites and job history. They never include provider API keys. Up to 512 MB of originals / 10,000 images per bundle; thumbnails are rebuilt. Backups can contain private images and prompts, so store them privately.
+
+Import first uploads to isolated temporary storage and checks image types, sizes, hashes and the complete archive before showing a preview. Confirming import **adds** copies with fresh IDs into the current gallery; it does not overwrite existing images. Album/set/image references are remapped. Restore generation settings only by checking the option in the preview. Imported active jobs become interrupted history and are never submitted. Canceled previews are discarded; stale staging data is cleaned on a later import after one hour.
+
+Relinking changes the current avatar-filename association to an existing gallery belonging to the same SillyTavern user. It neither merges nor deletes data. Existing characters that point to the source can still share it. Use original gallery returns to this avatar filename's original gallery. Running jobs stay bound to their original gallery ID. To make an independent copy instead, export and import a backup.
+
+### Update from 0.1.x
+
+Run the Git-free installer below again. It updates **both** the extension and `character-gallery-api`; fully restart SillyTavern afterward. Do not replace Inspiration Board Sync or the Capture Browser APK. No provider or paid generation changes are required for this update.
 
 ## Features
 
@@ -23,7 +43,7 @@ This first release is for **image generation**. Video generation is not included
 
 ### Recommended: Git-free installer
 
-The v0.1.1 installer deliberately avoids `git clone`. It downloads the public branch archive, installs it into its own extension folder, removes any Git metadata, and installs the bundled server plugin. Character galleries and saved provider keys are not deleted.
+The installer deliberately avoids `git clone`. It downloads the public branch archive, installs it into its own extension folder, removes any Git metadata, and installs the bundled server plugin. Character galleries and saved provider keys are not deleted.
 
 Assuming SillyTavern is at `~/SillyTavern` and the user directory is `default-user`:
 
@@ -77,7 +97,7 @@ Gallery data lives under:
 data/<user>/character-gallery-studio/<hash-of-avatar-filename>/
 ```
 
-Back up the `character-gallery-studio` directory with your usual SillyTavern data backups. Display-name changes preserve the gallery. If the character's avatar filename changes, it gets a new gallery; the old data is retained.
+Back up the `character-gallery-studio` directory with your usual SillyTavern data backups. Display-name changes preserve the gallery. If the character's avatar filename changes, it initially gets a new gallery; use Connections → Attach an existing gallery to relink the old data.
 
 Provider calls are server-side. Only the prompt, explicit generation parameters and selected original images are sent. Character chat messages are not sent automatically. Model policies still apply; **Unmoderated is not the same as guaranteed NSFW support**.
 
@@ -92,7 +112,7 @@ bash -n tools/install-plugin.sh
 bash -n tools/install-termux.sh
 ```
 
-Tests cover per-user/per-character storage, concurrent uploads, original-image forwarding, provider payloads, duplicate submit protection, persistent settings, and interrupted jobs.
+Tests cover per-user/per-character storage, concurrent uploads, original-image forwarding, provider payloads, duplicate submit protection, persistent settings, interrupted jobs, reference sets, albums, review/trash/restore, original-vs-thumbnail integrity, backup validation/round trips and user-isolated relinking. `tests/ui-smoke.py` exercises the controls with a mocked local provider at unfolded-portrait and narrow-phone viewports. No paid API calls are part of tests.
 
 ## API references
 

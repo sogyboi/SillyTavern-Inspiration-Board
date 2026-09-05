@@ -2,6 +2,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { VERSION, ROLES, settingsWithDefaults, referenceImages, validateRequest, buildProviderRequest } from './core.mjs';
+import { migrateGallery } from './collections.mjs';
+import { installLibraryApi, readBindings } from './library-api.mjs';
 import { normalizeOpenRouter, normalizeVenice } from './models.mjs';
 
 export const info = Object.freeze({ id: 'character-gallery-api', name: 'Character Gallery Studio API', description: 'Private per-user character galleries and OpenRouter/Venice image generation.' });
@@ -78,7 +80,7 @@ export function createGalleryApi({ secretStore, fetchImpl = globalThis.fetch }) 
         try { return await next; } finally { if (locks.get(key) === next) locks.delete(key); }
     }
     async function read(req, id) {
-        try { return JSON.parse(await fs.readFile(path.join(folder(req, id), 'gallery.json'), 'utf8')); }
+        try { return migrateGallery(JSON.parse(await fs.readFile(path.join(folder(req, id), 'gallery.json'), 'utf8'))); }
         catch (e) { if (e.code === 'ENOENT') throw fail('Gallery not found.', 404); throw e; }
     }
     async function write(req, gallery) {
@@ -136,7 +138,7 @@ export function createGalleryApi({ secretStore, fetchImpl = globalThis.fetch }) 
     async function addImage(req, gallery, dataUrl, fields = {}) {
         const data = imageBytes(dataUrl), id = randomUUID(), filename = `${id}.${data.ext}`;
         await fs.writeFile(path.join(folder(req, gallery.id), filename), data.bytes);
-        const row = { id, filename, name: clean(fields.name || 'Image'), mime: data.mime, bytes: data.bytes.length, sha256: data.sha256, width: Number(fields.width) || 0, height: Number(fields.height) || 0, role: 'general', favorite: false, tags: [], notes: '', source: fields.source || 'upload', createdAt: Date.now(), ...(fields.generation ? { generation: fields.generation } : {}) };
+        const row = { id, filename, name: clean(fields.name || 'Image'), mime: data.mime, bytes: data.bytes.length, sha256: data.sha256, width: Number(fields.width) || 0, height: Number(fields.height) || 0, role: 'general', favorite: false, tags: [], notes: '', source: fields.source || 'upload', state: fields.source === 'generated' ? 'review' : 'kept', albumIds: [], createdAt: Date.now(), ...(fields.generation ? { generation: fields.generation } : {}) };
         gallery.images.unshift(row); return row;
     }
     async function changeJob(req, id, jobId, update) {
@@ -191,17 +193,18 @@ export function createGalleryApi({ secretStore, fetchImpl = globalThis.fetch }) 
         } finally { running.delete(runKey); }
     }
     function install(router) {
-        const route = (method, url, handler) => router[method](url, async (req, res) => {
+        const route = (method, url, handler, { raw = false } = {}) => router[method](url, async (req, res) => {
             try {
                 root(req); res.setHeader('Cache-Control', 'no-store');
-                const body = ['post', 'patch', 'delete'].includes(method) ? await readBody(req) : {};
+                const body = !raw && ['post', 'patch', 'delete'].includes(method) ? await readBody(req) : {};
                 const result = await handler(req, res, body);
                 if (result !== undefined && !res.headersSent) res.json(result);
             } catch (error) {
                 if (!res.headersSent) res.status(Number(error.status) || 500).json({ error: clean(error.message || 'Gallery request failed.', 1000) });
             }
         });
-        route('get', '/status', async req => ({ version: VERSION, storage: 'server', configured: { openrouter: Boolean(await secretStore.read(req, 'openrouter')), venice: Boolean(await secretStore.read(req, 'venice')) } }));
+        installLibraryApi({ route, root, folder, read, write, edit, locked, imageBytes, atomicJson, isRunning: (req, id, job) => running.has(`${folder(req, id)}:${job}`) });
+        route('get', '/status', async req => ({ version: VERSION, storage: 'server', features: ['collections-v2', 'backup-v1'], configured: { openrouter: Boolean(await secretStore.read(req, 'openrouter')), venice: Boolean(await secretStore.read(req, 'venice')) } }));
         route('post', '/key', async (req, _res, body) => {
             const provider = body.provider;
             if (!BASES[provider] || !String(body.key || '').trim()) throw fail('Choose a provider and enter its API key.');
@@ -212,13 +215,14 @@ export function createGalleryApi({ secretStore, fetchImpl = globalThis.fetch }) 
         route('get', '/models/:provider', async req => ({ models: await catalog(req, req.params.provider, req.query?.refresh === '1') }));
         route('post', '/gallery/open', async (req, _res, body) => {
             const avatar = clean(body.avatar, 500); if (!avatar) throw fail('Open a character chat first.');
-            const id = hash(`avatar:${avatar}`), dir = folder(req, id);
+            const bindings = await readBindings(root(req));
+            const id = bindings[hash(`avatar:${avatar}`)] || hash(`avatar:${avatar}`), dir = folder(req, id);
             return locked(dir, async () => {
                 await fs.mkdir(dir, { recursive: true });
                 let gallery;
                 try { gallery = await read(req, id); } catch (e) { if (e.status !== 404) throw e; }
                 gallery ||= { id, avatar, name: clean(body.name || avatar), mainImageId: null, images: [], jobs: [], settings: settingsWithDefaults(), createdAt: Date.now() };
-                gallery.name = clean(body.name || gallery.name); return write(req, gallery);
+                gallery.name = clean(body.name || gallery.name); migrateGallery(gallery); return write(req, gallery);
             });
         });
         route('get', '/gallery/:id', async req => locked(folder(req, req.params.id), async () => {
@@ -243,20 +247,8 @@ export function createGalleryApi({ secretStore, fetchImpl = globalThis.fetch }) 
             if (body.imageId !== null && !g.images.some(i => i.id === body.imageId)) throw fail('Image not found.', 404);
             g.mainImageId = body.imageId;
         }));
-        route('delete', '/gallery/:id/images', async (req, _res, body) => edit(req, req.params.id, async g => {
-            if (!Array.isArray(body.ids) || !body.ids.length) throw fail('Select images to delete.');
-            const ids = new Set(body.ids);
-            if (g.jobs.some(j => ACTIVE.has(j.status) && j.referenceIds.some(id => ids.has(id)))) throw fail('A running job is using one of these references. Wait for it to finish.', 409);
-            const removed = g.images.filter(i => ids.has(i.id));
-            g.images = g.images.filter(i => !ids.has(i.id));
-            g.settings.selectedIds = g.settings.selectedIds.filter(id => !ids.has(id));
-            if (ids.has(g.mainImageId)) g.mainImageId = null;
-            await write(req, g);
-            await Promise.all(removed.map(i => fs.unlink(path.join(folder(req, g.id), i.filename)).catch(() => {})));
-            return { removed: removed.length };
-        }));
         route('get', '/gallery/:id/image/:image', async (req, res) => {
-            const g = await read(req, req.params.id), image = g.images.find(i => i.id === req.params.image);
+            const g = await read(req, req.params.id), image = [...g.images, ...g.trash].find(i => i.id === req.params.image);
             if (!image) throw fail('Image not found.', 404);
             const bytes = await fs.readFile(path.join(folder(req, g.id), image.filename));
             res.setHeader('Content-Type', image.mime); res.setHeader('X-Content-Type-Options', 'nosniff');
