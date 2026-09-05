@@ -1,3 +1,4 @@
+import { LibraryUi } from './library-ui.js';
 import { VERSION, ROLES, copy, settingsWithDefaults, characterFromContext, groupCharacters, referenceImages, validateRequest } from './server-plugin/character-gallery-api/core.mjs';
 import { filteredModels, priceLabel } from './server-plugin/character-gallery-api/models.mjs';
 
@@ -135,8 +136,10 @@ class GalleryPanel {
         this.q('[data-key-form]').onsubmit = e => { e.preventDefault(); void this.saveKey(); };
         dialog.ondragover = e => { if ([...e.dataTransfer.types].includes('Files')) e.preventDefault(); };
         dialog.ondrop = e => { if (e.dataTransfer.files.length) { e.preventDefault(); void this.upload([...e.dataTransfer.files]); } };
+        this.library = new LibraryUi(this, { api, imageUrl, fileData, clickDownload, esc });
         try {
             await this.checkConnection();
+            if (!this.status.features?.includes('collections-v2')) throw new Error('Update the bundled Character Gallery API server plugin to v0.2.0 and restart SillyTavern. Your gallery data is unchanged.');
             this.gallery = await api('/gallery/open', { method: 'POST', body: this.character });
             if (this.closed) return;
             this.settings = settingsWithDefaults(this.gallery.settings);
@@ -170,11 +173,13 @@ class GalleryPanel {
     }
     async close() {
         try { await this.flushSettings(); } catch { toast('Settings could not be saved. Check your server connection.', 'warning'); }
+        this.library?.dispose();
         this.closed = true; clearTimeout(this.pollTimer); clearTimeout(this.saveTimer); this.catalogEpoch++;
         this.viewer?.close(); this.viewer?.remove(); this.dialog.close(); this.dialog.remove();
         if (openPanel === this) openPanel = null;
     }
     showTab(tab) {
+        this.library?.onTab(tab);
         this.tab = tab; this.dialog.querySelectorAll('[data-page]').forEach(p => p.hidden = p.dataset.page !== tab);
         this.dialog.querySelectorAll('[data-tab]').forEach(b => { b.classList.toggle('active', b.dataset.tab === tab); b.setAttribute('aria-selected', String(b.dataset.tab === tab)); });
         if (tab === 'generate') { if (!this.models.length || this.loadedProvider !== this.settings.provider) void this.loadModels(); this.renderRefs(); this.renderResults(); this.renderJobs(); }
@@ -183,8 +188,10 @@ class GalleryPanel {
     async refresh(force = false) {
         if (!this.gallery || this.closed) return;
         try {
-            this.gallery = await api(`/gallery/${this.gallery.id}`);
-            if (this.closed) return;
+            const galleryId = this.gallery.id;
+            const fresh = await api(`/gallery/${galleryId}`);
+            if (this.closed || this.gallery.id !== galleryId) return;
+            this.gallery = fresh;
             // Do not overwrite controls/drafts while a job is polling.
             this.renderGallery(force); this.renderJobs(); this.renderResults(); this.renderRefs();
             if (force) this.notice('Gallery refreshed.');
@@ -224,11 +231,13 @@ class GalleryPanel {
         this.settingsChanged(); this.renderGallery(true); this.renderRefs();
     }
     visibleImages() {
+        if (this.library) return this.library.visibleImages();
         if (!this.gallery) return [];
         const term = this.q('[data-gallery-search]').value.trim().toLowerCase(), filter = this.q('[data-gallery-filter]').value;
         return this.gallery.images.filter(i => (!term || `${i.name} ${i.notes} ${i.tags.join(' ')}`.toLowerCase().includes(term)) && (filter === 'all' || filter === i.source || filter === i.role || filter === 'favorite' && i.favorite || filter === 'references' && (this.settings.selectedIds.includes(i.id) || this.gallery.mainImageId === i.id)));
     }
     renderGallery(force = false) {
+        if (this.library) return this.library.renderGallery(force);
         if (!this.gallery || this.closed) return;
         this.q('[data-count]').textContent = this.gallery.images.length;
         this.q('[data-selected]').textContent = `${this.settings.selectedIds.length} reference(s) selected`;
@@ -244,6 +253,7 @@ class GalleryPanel {
         });
     }
     async deleteSelected() {
+        if (this.library) return this.library.action('trash');
         const ids = [...this.settings.selectedIds]; if (!ids.length || !confirm(`Delete ${ids.length} selected image(s) from ${this.character.name}’s gallery? This cannot be undone.`)) return;
         try { await api(`/gallery/${this.gallery.id}/images`, { method: 'DELETE', body: { ids } }); this.settings.selectedIds = []; this.settingsChanged(); await this.refresh(true); }
         catch (e) { this.notice(e.message, true); }
@@ -262,9 +272,10 @@ class GalleryPanel {
         } catch (e) { if (epoch === this.catalogEpoch && !this.closed) { this.models = []; this.q('[data-models]').textContent = e.message; this.notice(e.message, true); this.renderModel(); } }
     }
     renderModelList() {
-        const selected = this.settings.providers[this.settings.provider].model, rows = filteredModels(this.models, this.filters);
+        const selected = this.settings.providers[this.settings.provider].model, rows = this.library ? this.library.sortModels(filteredModels(this.models, this.filters)) : filteredModels(this.models, this.filters);
         this.q('[data-models]').innerHTML = rows.length ? rows.map(m => `<button type="button" role="option" aria-selected="${m.id === selected}" data-model="${esc(m.id)}" class="cgs-model-option ${m.id === selected ? 'active' : ''}"><span><strong>${esc(m.name)}</strong><small>${m.refs.max ? `${m.refs.min ? 'Requires' : 'Supports'} refs · max ${m.refs.max}` : 'Prompt only'}${m.uncensored ? ' · Uncensored / NSFW' : ''}</small></span><b>${esc(priceLabel(m.price))}</b></button>`).join('') : '<p>No models match these filters. Your previous selection is kept.</p>';
         this.q('[data-models]').querySelectorAll('[data-model]').forEach(b => b.onclick = () => { this.settings.providers[this.settings.provider].model = b.dataset.model; this.settingsChanged(); this.renderModelList(); this.renderModel(); });
+        this.library?.decorateModels();
     }
     renderModel() {
         const m = this.model(), s = this.settings.providers[this.settings.provider];
@@ -276,6 +287,7 @@ class GalleryPanel {
         this.q('[data-params]').querySelectorAll('[data-param]').forEach(el => el.onchange = () => { s[el.dataset.param] = el.dataset.param === 'count' ? Number(el.value) : el.value; this.settingsChanged(); this.renderEstimate(); });
         this.q('[data-negative-wrap]').hidden = !m.params.negative; this.q('[data-safe-wrap]').hidden = m.provider !== 'venice';
         this.renderRefs(); this.renderEstimate(); this.settingsChanged();
+        const summary = this.q('[data-model-summary]'); if (summary) summary.textContent = m.name;
     }
     renderEstimate() {
         const m = this.model(); if (!m) return;
@@ -293,6 +305,7 @@ class GalleryPanel {
             this.refsSignature = signature; this.q('[data-refs]').innerHTML = refs.map((r, i) => `<button type="button" data-ref-preview="${r.id}" title="${esc(r.name)}"><img src="${imageUrl(this.gallery, r.id)}" alt="${esc(r.name)}"><span>${i + 1}${i === 0 ? ' · Base' : ''}</span></button>`).join('');
             this.q('[data-refs]').querySelectorAll('[data-ref-preview]').forEach(b => b.onclick = () => this.openViewer(b.dataset.refPreview, refs.map(r => r.id)));
         }
+        this.library?.decorateRefs();
     }
     async generate() {
         if (!this.gallery || this.busy) return;
@@ -326,12 +339,13 @@ class GalleryPanel {
     }
     renderResults() {
         if (!this.gallery || this.closed) return;
-        const rows = this.gallery.images.filter(i => i.source === 'generated').slice(0, 8), signature = rows.map(i => i.id).join();
+        const rows = this.gallery.images.filter(i => i.source === 'generated' && i.state !== 'archived').slice(0, 8), signature = rows.map(i => `${i.id}:${i.state}`).join();
         if (signature === this.resultsSignature) return; this.resultsSignature = signature;
         this.q('[data-results]').innerHTML = rows.length ? `<h3>Recent results</h3><p class="cgs-help">Saved in ${esc(this.character.name)}’s gallery. Tap to view full size.</p>${rows.map(i => `<article><button type="button" class="cgs-result-image" data-result="${i.id}"><img src="${imageUrl(this.gallery, i.id)}" loading="lazy" alt="${esc(i.name)}"></button><div class="cgs-toolbar"><button type="button" data-result="${i.id}">View full</button><button type="button" data-result-ref="${i.id}">Use as reference</button><button type="button" data-download="${i.id}">Download</button></div></article>`).join('')}` : '';
         this.q('[data-results]').querySelectorAll('[data-result]').forEach(b => b.onclick = () => this.openViewer(b.dataset.result, rows.map(i => i.id)));
         this.q('[data-results]').querySelectorAll('[data-result-ref]').forEach(b => b.onclick = () => { this.settings.selectedIds = [b.dataset.resultRef]; this.settings.referenceMode = 'selected'; this.q('[data-ref-mode]').value = 'selected'; this.settingsChanged(); this.renderRefs(); this.renderGallery(true); this.notice('Result selected as the next reference.'); });
         this.q('[data-results]').querySelectorAll('[data-download]').forEach(b => b.onclick = () => downloadImage(this.gallery, rows.find(i => i.id === b.dataset.download)).catch(e => this.notice(e.message, true)));
+        this.library?.decorateResults(rows);
     }
     async saveKey() {
         const form = this.q('[data-key-form]'), button = form.querySelector('button'); button.disabled = true;
@@ -349,11 +363,12 @@ class GalleryPanel {
         document.body.append(view); view.showModal();
         const q = s => view.querySelector(s), stage = q('[data-stage]'), img = q('[data-v-image]');
         let at = Math.max(0, ids.indexOf(id)), zoom = 1, x = 0, y = 0, start = null, pinch = null; const pointers = new Map();
-        const current = () => this.gallery.images.find(i => i.id === ids[at]);
+        const current = () => (this.library?.allImages() || this.gallery.images).find(i => i.id === ids[at]);
         const transform = () => img.style.transform = `translate(${x}px, ${y}px) scale(${zoom})`;
         const fit = () => { zoom = 1; x = y = 0; transform(); };
         const show = delta => {
             at = (at + delta + ids.length) % ids.length; const image = current(); if (!image) return;
+            for (const selector of ['[data-v-main]', '[data-v-ref]', '[data-v-save]']) q(selector).disabled = Boolean(image.deletedAt);
             fit(); img.src = imageUrl(this.gallery, image.id); img.alt = image.name; q('[data-v-title]').textContent = `${at + 1} / ${ids.length} · ${image.name}`;
             q('[data-v-name]').value = image.name; q('[data-v-role]').value = image.role; q('[data-v-tags]').value = image.tags.join(', '); q('[data-v-notes]').value = image.notes;
             q('[data-v-info]').textContent = `${formatBytes(image.bytes)} · ${image.mime}${image.generation ? ` · ${image.generation.provider} / ${image.generation.model}` : ''}`;

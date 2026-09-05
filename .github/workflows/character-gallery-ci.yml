@@ -2,26 +2,56 @@ name: Character Gallery Studio
 on:
   push:
     branches: [character-gallery-studio]
+  pull_request:
+    branches: [character-gallery-studio]
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: npm test
-      - run: npm run check
-      - name: Check installers
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: API and reference regression tests
+        run: npm test
+      - name: Syntax and installer checks
         run: |
+          npm run check
           bash -n tools/install-plugin.sh
           bash -n tools/install-termux.sh
+      - name: Install browser-test dependencies
+        run: |
+          python -m pip install playwright==1.62.0 Pillow==12.3.0
+          python -m playwright install --with-deps chromium
+      - name: Fold and phone workflows (simulated providers, no paid calls)
+        run: |
+          node tests/mock-host.mjs > /tmp/cgs-ui-host.log 2>&1 &
+          HOST_PID=$!
+          trap 'kill "$HOST_PID" 2>/dev/null || true' EXIT
+          sleep 2
+          python tests/ui-smoke.py
+      - name: Browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Character-Gallery-UI-${{ github.run_id }}
+          path: |
+            /tmp/cgs-ui-artifacts/
+            /tmp/cgs-ui-host.log
+          if-no-files-found: ignore
+      - name: Read extension version
+        id: version
+        run: echo "value=$(node -p 'require("./package.json").version')" >> "$GITHUB_OUTPUT"
       - name: Package installable extension
-        run: zip -r Character-Gallery-Studio-v0.1.1.zip manifest.json index.js style.css README.md LICENSE CHANGELOG.md package.json server-plugin tools tests
+        run: zip -r Character-Gallery-Studio-v${{ steps.version.outputs.value }}.zip manifest.json index.js library-ui.js style.css README.md LICENSE CHANGELOG.md package.json server-plugin tools tests
       - uses: actions/upload-artifact@v4
         with:
-          name: Character-Gallery-Studio-v0.1.1
-          path: Character-Gallery-Studio-v0.1.1.zip
+          name: Character-Gallery-Studio-v${{ steps.version.outputs.value }}
+          path: Character-Gallery-Studio-v${{ steps.version.outputs.value }}.zip
